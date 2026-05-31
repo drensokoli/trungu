@@ -1,5 +1,4 @@
-<!-- BEGIN:nextjs-agent-rules -->
-# This is NOT the Next.js you know
+# family-tree
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-<!-- END:nextjs-agent-rules -->
+Next.js 15 (App Router) + React 19. Prisma + PostgreSQL (Neon). NextAuth v4 (Google + Credentials).
+Canvas built with @xyflow/react. Notion-style UI, forest-green accent, dark/light via next-themes.

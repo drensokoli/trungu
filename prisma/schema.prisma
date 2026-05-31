@@ -1,0 +1,123 @@
+// Family Tree — Prisma schema (PostgreSQL / Neon)
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Sex {
+  MALE
+  FEMALE
+  UNKNOWN
+}
+
+// ----- NextAuth (Prisma adapter) -----
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  name          String?
+  image         String?
+  passwordHash  String? // null for Google-only users
+  emailVerified DateTime? // kept for adapter compatibility, unused in MVP
+  accounts      Account[]
+  sessions      Session[]
+  trees         Tree[]
+  createdAt     DateTime  @default(now())
+}
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ----- Domain -----
+model Tree {
+  id           String        @id @default(cuid())
+  name         String        @default("My Family Tree")
+  ownerId      String
+  owner        User          @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  selfPersonId String?       @unique // the logged-in user's own card
+  persons      Person[]
+  partnerships Partnership[]
+  createdAt    DateTime      @default(now())
+}
+
+model Person {
+  id          String        @id @default(cuid())
+  treeId      String
+  tree        Tree          @relation(fields: [treeId], references: [id], onDelete: Cascade)
+  firstName   String
+  lastName    String?
+  sex         Sex           @default(UNKNOWN)
+  birthDate   DateTime?
+  birthPlace  String?
+  deceased    Boolean       @default(false)
+  deathDate   DateTime?
+  deathPlace  String?
+  positionX   Float? // persisted canvas position (null -> auto-layout)
+  positionY   Float?
+  parentLinks ParentChild[] @relation("child") // rows where this person is the child
+  childLinks  ParentChild[] @relation("parent") // rows where this person is the parent
+  partnersA   Partnership[] @relation("partnerA")
+  partnersB   Partnership[] @relation("partnerB")
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+
+  @@index([treeId])
+}
+
+model ParentChild {
+  id       String @id @default(cuid())
+  parentId String
+  childId  String
+  parent   Person @relation("parent", fields: [parentId], references: [id], onDelete: Cascade)
+  child    Person @relation("child", fields: [childId], references: [id], onDelete: Cascade)
+
+  @@unique([parentId, childId])
+  @@index([childId])
+}
+
+model Partnership {
+  id         String @id @default(cuid())
+  treeId     String
+  tree       Tree   @relation(fields: [treeId], references: [id], onDelete: Cascade)
+  partnerAId String
+  partnerBId String
+  partnerA   Person @relation("partnerA", fields: [partnerAId], references: [id], onDelete: Cascade)
+  partnerB   Person @relation("partnerB", fields: [partnerBId], references: [id], onDelete: Cascade)
+
+  @@unique([partnerAId, partnerBId])
+  @@index([treeId])
+}
