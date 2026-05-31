@@ -1,4 +1,3 @@
-import dagre from "@dagrejs/dagre";
 import type { Edge, Node } from "@xyflow/react";
 import type { PersonDTO, TreeDTO } from "@/lib/types";
 
@@ -6,6 +5,9 @@ export const NODE_WIDTH = 200;
 // Must match the person card's actual rendered height (see person-node.tsx) so
 // the spouse bar lines up with where child stems begin.
 export const NODE_HEIGHT = 72;
+// Gap between the two cards of a couple. A couple is laid out as ONE dagre node
+// spanning both cards + this gap, so spouses can never drift apart.
+export const SPOUSE_GAP = 48;
 
 export type PersonNodeData = {
   person: PersonDTO;
@@ -31,12 +33,15 @@ const unionNodeId = (key: string) => `u:${key}`;
 
 type Union = { key: string; parentIds: string[]; childIds: string[] };
 
-/** Minimal shape the layout needs — person ids + the relationship edges. */
+/** Minimal shape the layout needs — person ids (+ optional birthDate) + edges. */
 type LayoutInput = {
-  persons: Pick<PersonDTO, "id">[];
+  persons: (Pick<PersonDTO, "id"> & { birthDate?: string | null })[];
   parentChild: { parentId: string; childId: string }[];
   partnerships: { partnerAId: string; partnerBId: string }[];
 };
+
+/** A layout unit: a married/co-parenting pair (2 members) or a lone person (1). */
+type Couple = { id: string; memberIds: string[] };
 
 /** Group people into unions keyed by the *set* of co-parents that share children. */
 function computeUnions(tree: LayoutInput): Union[] {
@@ -72,115 +77,395 @@ function computeUnions(tree: LayoutInput): Union[] {
 }
 
 /**
- * Top-to-bottom layout via dagre. Each union becomes a tiny intermediate node
- * (parents -> union -> children) so co-parents land adjacent and their kids
- * share a rank directly beneath them. Returns person top-left positions.
+ * Group people into couples so the layout can treat each couple as ONE node.
+ * A couple = two people who are partners, or the two co-parents of a 2-parent
+ * union. Each person joins at most one couple (first pairing wins); anyone left
+ * over — singles, lone parents, or the "extra" spouse in a remarriage — becomes
+ * a one-member group. Returns the groups plus a person -> group-id lookup.
+ */
+function computeCouples(tree: LayoutInput): {
+  groups: Couple[];
+  groupOf: Map<string, string>;
+} {
+  const ids = tree.persons.map((p) => p.id);
+  const idSet = new Set(ids);
+
+  // Candidate pairs: explicit partnerships first (they win ties), then the
+  // co-parent pairs implied by any union with exactly two parents.
+  const pairs: [string, string][] = [];
+  for (const pr of tree.partnerships) {
+    if (idSet.has(pr.partnerAId) && idSet.has(pr.partnerBId)) {
+      pairs.push([pr.partnerAId, pr.partnerBId]);
+    }
+  }
+  for (const u of computeUnions(tree)) {
+    const present = u.parentIds.filter((id) => idSet.has(id));
+    if (present.length === 2) pairs.push([present[0], present[1]]);
+  }
+
+  const mate = new Map<string, string>();
+  for (const [a, b] of pairs) {
+    if (a === b) continue;
+    if (!mate.has(a) && !mate.has(b)) {
+      mate.set(a, b);
+      mate.set(b, a);
+    }
+  }
+
+  const groups: Couple[] = [];
+  const groupOf = new Map<string, string>();
+  const done = new Set<string>();
+  for (const id of ids) {
+    if (done.has(id)) continue;
+    const m = mate.get(id);
+    const members = m !== undefined && !done.has(m) ? [id, m] : [id];
+    const gid = `g:${[...members].sort().join("+")}`;
+    for (const mem of members) {
+      done.add(mem);
+      groupOf.set(mem, gid);
+    }
+    groups.push({ id: gid, memberIds: members });
+  }
+  return { groups, groupOf };
+}
+
+/** Compare two ISO birth dates, oldest first; null/unknown sinks to the end. */
+function compareBirth(a: string | null, b: string | null): number {
+  if (a === b) return 0;
+  if (!a) return 1;
+  if (!b) return -1;
+  return a < b ? -1 : 1;
+}
+
+// --- Genealogy layout constants -------------------------------------------
+// Gap between adjacent generations (between the near edges of two rows).
+const MAIN_GAP = 92;
+// Cross-axis gap between sibling subtrees within one sibship.
+const SIBLING_GAP = 40;
+// Cross-axis gap between the paternal and maternal ancestor bands of a couple.
+const BAND_GAP = 56;
+
+/**
+ * Focal-rooted genealogy ("hourglass") layout. Roots the tree at one person
+ * (the "You" card) and draws ancestors fanning **up** as a binary pedigree and
+ * descendants fanning **down** as a tidy tree. Because each ancestor's two
+ * parent-couples get disjoint reserved cross-axis bands, the paternal and
+ * maternal branches never compete for the same space — this is what eliminates
+ * the "diamond" tangle a generic layered layout produces.
+ *
+ * The whole computation runs in generic (main, cross) coordinates — main =
+ * generation axis, cross = sibling-spread axis — then projects to (x, y) for the
+ * requested orientation, so TB and LR both pack without overlap.
+ */
+export function buildGenealogyLayout(
+  tree: LayoutInput,
+  orientation: Orientation,
+  selfPersonId?: string | null,
+): Map<string, Pos> {
+  const isTB = orientation === "TB";
+  // A card's extent along the cross axis, and the per-generation step.
+  const crossCard = isTB ? NODE_WIDTH : NODE_HEIGHT;
+  const mainStep = (isTB ? NODE_HEIGHT : NODE_WIDTH) + MAIN_GAP;
+
+  const { groups, groupOf } = computeCouples(tree);
+  const unitById = new Map(groups.map((g) => [g.id, g]));
+  const unitOf = (pid: string): Couple | undefined => {
+    const gid = groupOf.get(pid);
+    return gid ? unitById.get(gid) : undefined;
+  };
+
+  const birthById = new Map<string, string | null>();
+  for (const p of tree.persons) birthById.set(p.id, p.birthDate ?? null);
+
+  const parentsByChild = new Map<string, string[]>();
+  const childrenByParent = new Map<string, string[]>();
+  const push = (m: Map<string, string[]>, k: string, v: string) => {
+    const a = m.get(k);
+    if (a) a.push(v);
+    else m.set(k, [v]);
+  };
+  for (const { parentId, childId } of tree.parentChild) {
+    push(parentsByChild, childId, parentId);
+    push(childrenByParent, parentId, childId);
+  }
+
+  const byBirth = (a: string, b: string) =>
+    compareBirth(birthById.get(a) ?? null, birthById.get(b) ?? null);
+  // Member order within a couple: oldest first (left in TB / top in LR).
+  const orderedMembers = (u: Couple) => [...u.memberIds].sort(byBirth);
+
+  const positions = new Map<string, Pos>();
+  const visited = new Set<string>();
+
+  // Write a single card at a cross-axis center on a given generation row.
+  const place = (id: string, crossCenter: number, row: number) => {
+    const mainTop = row * mainStep;
+    const crossTop = crossCenter - crossCard / 2;
+    positions.set(
+      id,
+      isTB ? { x: crossTop, y: mainTop } : { x: mainTop, y: crossTop },
+    );
+  };
+  // The child-units of a couple (units led by each of its children), age-ordered.
+  const childUnitsOf = (u: Couple): Couple[] => {
+    const kids: string[] = [];
+    for (const m of u.memberIds) {
+      for (const c of childrenByParent.get(m) ?? []) {
+        if (!kids.includes(c)) kids.push(c);
+      }
+    }
+    kids.sort(byBirth);
+    const seen = new Set<string>();
+    const res: Couple[] = [];
+    for (const c of kids) {
+      const cu = unitOf(c);
+      if (!cu || seen.has(cu.id)) continue;
+      seen.add(cu.id);
+      res.push(cu);
+    }
+    return res;
+  };
+
+  // --- Block model ---------------------------------------------------------
+  // A Block is a set of already-laid-out card nodes in local cross coordinates,
+  // plus an `anchor` (the cross center of the block's key unit). Blocks compose
+  // by shifting: every layout primitive returns one, so descendants, sibling
+  // flanks, and ancestor bands all merge with the same arithmetic.
+  type BNode = { id: string; c: number; row: number };
+  type Block = { nodes: BNode[]; anchor: number };
+  const shift = (b: Block, dx: number): Block => ({
+    nodes: b.nodes.map((n) => ({ ...n, c: n.c + dx })),
+    anchor: b.anchor + dx,
+  });
+  // Cross-axis [lo, hi] a block occupies (card edges included).
+  const extent = (b: Block): [number, number] => {
+    if (b.nodes.length === 0) return [b.anchor, b.anchor];
+    let lo = Infinity;
+    let hi = -Infinity;
+    for (const n of b.nodes) {
+      lo = Math.min(lo, n.c);
+      hi = Math.max(hi, n.c);
+    }
+    return [lo - crossCard / 2, hi + crossCard / 2];
+  };
+  // Pack blocks left-to-right with SIBLING_GAP between them. Returns the placed
+  // blocks (in a shared frame starting at 0) and the frame's [lo, hi].
+  const packRow = (blocks: Block[]): { placed: Block[]; lo: number; hi: number } => {
+    const placed: Block[] = [];
+    let cursor = 0;
+    for (const b of blocks) {
+      const [lo, hi] = extent(b);
+      placed.push(shift(b, cursor - lo));
+      cursor += hi - lo + SIBLING_GAP;
+    }
+    return { placed, lo: 0, hi: Math.max(0, cursor - SIBLING_GAP) };
+  };
+  // A lone/couple unit's own cards, anchored at cross 0.
+  const unitBlock = (u: Couple, row: number): Block => {
+    const order = orderedMembers(u);
+    if (order.length === 1) return { nodes: [{ id: order[0], c: 0, row }], anchor: 0 };
+    const d = (crossCard + SPOUSE_GAP) / 2;
+    return {
+      nodes: [
+        { id: order[0], c: -d, row },
+        { id: order[1], c: d, row },
+      ],
+      anchor: 0,
+    };
+  };
+
+  const parentUnitOf = (m: string): Couple | undefined => {
+    const pids = parentsByChild.get(m);
+    if (!pids || pids.length === 0) return undefined;
+    return unitOf(pids[0]);
+  };
+  // Units led by m's siblings (m's parents' other children), excluding m's own
+  // unit and anything already placed.
+  const siblingUnits = (m: string, own: Couple): Couple[] => {
+    const p = parentUnitOf(m);
+    if (!p) return [];
+    return childUnitsOf(p).filter((su) => su.id !== own.id && !visited.has(su.id));
+  };
+
+  // --- Downward tidy tree (descendants) ------------------------------------
+  // Each subtree owns a disjoint cross interval, so nothing overlaps. The parent
+  // couple is centered over its children comb.
+  const descBlock = (u: Couple, row: number): Block | null => {
+    if (visited.has(u.id)) return null;
+    visited.add(u.id);
+    const self = unitBlock(u, row);
+    const kids: Block[] = [];
+    for (const cu of childUnitsOf(u)) {
+      const b = descBlock(cu, row + 1);
+      if (b) kids.push(b);
+    }
+    if (kids.length === 0) return self;
+    const { placed } = packRow(kids);
+    const center =
+      (placed[0].anchor + placed[placed.length - 1].anchor) / 2;
+    const s = shift(self, center - self.anchor);
+    return { nodes: [...s.nodes, ...placed.flatMap((p) => p.nodes)], anchor: center };
+  };
+
+  // --- Upward lineage (ancestors + collaterals) ----------------------------
+  // For a spine unit, attach each member's siblings (as descendant subtrees)
+  // flanking outward, then center each member's parent-couple band over
+  // [that member's flank + the member's card], recursing up. Disjoint bands +
+  // outward flanks keep maternal/paternal branches from ever colliding.
+  const buildAround = (u: Couple, row: number, emitSelf: boolean): Block => {
+    visited.add(u.id);
+    const order = orderedMembers(u);
+    const nodes: BNode[] = [];
+    const d = (crossCard + SPOUSE_GAP) / 2;
+
+    if (order.length === 2) {
+      const [mL, mR] = order;
+      if (emitSelf) {
+        nodes.push({ id: mL, c: -d, row }, { id: mR, c: d, row });
+      }
+
+      // Left member's siblings as descendant subtrees, packed just left of its
+      // card; the "group" is the flank plus the member card.
+      const lf = siblingUnits(mL, u)
+        .map((su) => descBlock(su, row))
+        .filter((b): b is Block => b !== null);
+      let leftGroupLo = -d - crossCard / 2;
+      const leftGroupHi = -d + crossCard / 2;
+      if (lf.length > 0) {
+        const { placed, hi } = packRow(lf);
+        const fshift = -d - crossCard / 2 - SIBLING_GAP - hi;
+        for (const b of placed) nodes.push(...shift(b, fshift).nodes);
+        leftGroupLo = Math.min(...placed.map((b) => extent(b)[0])) + fshift;
+      }
+
+      // Right member's siblings, packed just right of its card.
+      const rf = siblingUnits(mR, u)
+        .map((su) => descBlock(su, row))
+        .filter((b): b is Block => b !== null);
+      const rightGroupLo = d - crossCard / 2;
+      let rightGroupHi = d + crossCard / 2;
+      if (rf.length > 0) {
+        const { placed, lo } = packRow(rf);
+        const fshift = d + crossCard / 2 + SIBLING_GAP - lo;
+        for (const b of placed) nodes.push(...shift(b, fshift).nodes);
+        rightGroupHi = Math.max(...placed.map((b) => extent(b)[1])) + fshift;
+      }
+
+      // Each parent-couple band is centered over its child group; if the two
+      // bands would collide (e.g. no flanks to separate them), push them apart
+      // symmetrically so the paternal/maternal columns stay disjoint.
+      const PL = parentUnitOf(mL);
+      const PR = parentUnitOf(mR);
+      const lband = PL && !visited.has(PL.id) ? buildAround(PL, row - 1, true) : null;
+      const rband = PR && !visited.has(PR.id) ? buildAround(PR, row - 1, true) : null;
+      let lCenter = (leftGroupLo + leftGroupHi) / 2;
+      let rCenter = (rightGroupLo + rightGroupHi) / 2;
+      if (lband && rband) {
+        const [, lHi] = extent(lband);
+        const [rLo] = extent(rband);
+        const lAhi = lHi - lband.anchor;
+        const rAlo = rLo - rband.anchor;
+        const gap = rCenter + rAlo - (lCenter + lAhi);
+        if (gap < BAND_GAP) {
+          const pushAmt = (BAND_GAP - gap) / 2;
+          lCenter -= pushAmt;
+          rCenter += pushAmt;
+        }
+      }
+      if (lband) nodes.push(...shift(lband, lCenter - lband.anchor).nodes);
+      if (rband) nodes.push(...shift(rband, rCenter - rband.anchor).nodes);
+      return { nodes, anchor: 0 };
+    }
+
+    // Lone unit: weave the member into its siblings as one age-ordered comb,
+    // then center the parent band over the whole comb.
+    const m = order[0];
+    const sibs = siblingUnits(m, u);
+    type Item = { birth: string | null; block?: Block };
+    const items: Item[] = sibs.map((su) => {
+      const blood = su.memberIds.find((x) => parentUnitOf(x)?.id === parentUnitOf(m)?.id) ?? su.memberIds[0];
+      return { birth: birthById.get(blood) ?? null, block: descBlock(su, row) ?? undefined };
+    });
+    items.push({ birth: birthById.get(m) ?? null });
+    items.sort((a, b) => compareBirth(a.birth, b.birth));
+    let cursor = 0;
+    let selfCenter = 0;
+    const combNodes: BNode[] = [];
+    for (const it of items) {
+      if (!it.block) {
+        selfCenter = cursor + crossCard / 2;
+        if (emitSelf) combNodes.push({ id: m, c: selfCenter, row });
+        cursor += crossCard + SIBLING_GAP;
+      } else {
+        const [lo, hi] = extent(it.block);
+        const sb = shift(it.block, cursor - lo);
+        combNodes.push(...sb.nodes);
+        cursor += hi - lo + SIBLING_GAP;
+      }
+    }
+    // Recenter so the member sits at cross 0 (the block anchor).
+    for (const n of combNodes) nodes.push({ ...n, c: n.c - selfCenter });
+    const band = parentUnitOf(m);
+    if (band && !visited.has(band.id)) {
+      const bandBlock = buildAround(band, row - 1, true);
+      // The comb spans every sibling plus the member's own slot (at cross 0).
+      let lo = -crossCard / 2;
+      let hi = crossCard / 2;
+      for (const n of nodes) {
+        lo = Math.min(lo, n.c - crossCard / 2);
+        hi = Math.max(hi, n.c + crossCard / 2);
+      }
+      const combCenter = (lo + hi) / 2;
+      nodes.push(...shift(bandBlock, combCenter - bandBlock.anchor).nodes);
+    }
+    return { nodes, anchor: 0 };
+  };
+
+  // --- Compose the hourglass -----------------------------------------------
+  let focal: Couple | undefined;
+  if (selfPersonId && groupOf.has(selfPersonId)) focal = unitOf(selfPersonId);
+  if (!focal) {
+    focal = groups.find((g) =>
+      g.memberIds.every((m) => !(parentsByChild.get(m)?.length)),
+    );
+  }
+  if (!focal) focal = groups[0];
+
+  if (focal) {
+    // Descendants (incl. focal cards) centered at cross 0.
+    const desc = descBlock(focal, 0);
+    const descCentered = desc ? shift(desc, -desc.anchor) : null;
+    // Siblings + ancestors around the focal, sharing the same cross-0 center.
+    const around = buildAround(focal, 0, false);
+    const all = [...(descCentered?.nodes ?? []), ...around.nodes];
+    for (const n of all) place(n.id, n.c, n.row);
+  }
+
+  // Park anyone the focal traversal never reached so they are never lost.
+  const unplaced = tree.persons.filter((p) => !positions.has(p.id));
+  if (unplaced.length > 0) {
+    let maxMain = 0;
+    for (const p of positions.values()) maxMain = Math.max(maxMain, isTB ? p.y : p.x);
+    const parkRow = Math.round(maxMain / mainStep) + 2;
+    let cross = 0;
+    for (const p of unplaced) {
+      place(p.id, cross + crossCard / 2, parkRow);
+      cross += crossCard + SIBLING_GAP;
+    }
+  }
+
+  return positions;
+}
+
+/**
+ * Seed canvas positions for a freshly-created tree. Kept for the onboarding
+ * route; routes through the genealogy layout with a parentless-root fallback.
  */
 export function computeDagreLayout(
   persons: Pick<PersonDTO, "id">[],
   parentChild: { parentId: string; childId: string }[],
 ): Map<string, Pos> {
-  const { positions } = layoutTree(
-    { persons, parentChild, partnerships: [] },
-    "TB",
-  );
-  return positions;
-}
-
-/** Core dagre pass shared by the canvas and the seed-position helper. */
-function layoutTree(
-  tree: LayoutInput,
-  orientation: Orientation,
-): {
-  positions: Map<string, Pos>;
-  unions: Union[];
-} {
-  const unions = computeUnions(tree);
-
-  const g = new dagre.graphlib.Graph();
-  g.setGraph({
-    rankdir: orientation,
-    nodesep: 40,
-    // React Flow centers the sibling-distribution line between a union and its
-    // children, so its clearance from the parents is ~ranksep/2. In LR that
-    // line is vertical and runs parallel to the parents' right edge, so it
-    // needs a wider gap to avoid grazing the cards; in TB it's horizontal and
-    // crosses perpendicular, so a tighter rank gap reads cleanly.
-    ranksep: orientation === "LR" ? 110 : 44,
-    marginx: 60,
-    marginy: 60,
-  });
-  g.setDefaultEdgeLabel(() => ({}));
-
-  const personIds = new Set(tree.persons.map((p) => p.id));
-  for (const p of tree.persons) {
-    g.setNode(p.id, { width: NODE_WIDTH, height: NODE_HEIGHT });
-  }
-  for (const u of unions) {
-    const presentParents = u.parentIds.filter((id) => personIds.has(id));
-    const presentChildren = u.childIds.filter((id) => personIds.has(id));
-    if (presentParents.length === 0) continue;
-    const uid = unionNodeId(u.key);
-    g.setNode(uid, { width: 1, height: 1 });
-    for (const pid of presentParents) g.setEdge(pid, uid);
-    for (const cid of presentChildren) g.setEdge(uid, cid);
-  }
-
-  dagre.layout(g);
-
-  const positions = new Map<string, Pos>();
-  for (const p of tree.persons) {
-    const node = g.node(p.id);
-    if (node) {
-      positions.set(p.id, {
-        x: node.x - NODE_WIDTH / 2,
-        y: node.y - NODE_HEIGHT / 2,
-      });
-    }
-  }
-  return { positions, unions };
-}
-
-/**
- * Reorder siblings within each union so the oldest sits first along the
- * cross-axis (left→right for TB, top→bottom for LR). Dagre fixes the slots;
- * we only swap which child occupies which slot. Twins/unknown dates keep their
- * relative order (stable sort).
- */
-function orderSiblingsByAge(
-  positions: Map<string, Pos>,
-  unions: Union[],
-  persons: PersonDTO[],
-  orientation: Orientation,
-): void {
-  const birthById = new Map<string, string | null>();
-  for (const p of persons) birthById.set(p.id, p.birthDate);
-  const axis = orientation === "TB" ? "x" : "y";
-
-  for (const u of unions) {
-    const kids = u.childIds.filter((id) => positions.has(id));
-    if (kids.length < 2) continue;
-
-    // The slots dagre assigned, sorted along the cross-axis.
-    const slots = kids
-      .map((id) => positions.get(id)![axis])
-      .sort((a, b) => a - b);
-
-    // Children sorted oldest-first; missing birth dates sink to the end.
-    const ordered = [...kids].sort((a, b) => {
-      const da = birthById.get(a);
-      const db = birthById.get(b);
-      if (da === db) return 0;
-      if (!da) return 1;
-      if (!db) return -1;
-      return da < db ? -1 : 1;
-    });
-
-    ordered.forEach((id, i) => {
-      const pos = positions.get(id)!;
-      positions.set(id, { ...pos, [axis]: slots[i] });
-    });
-  }
+  return buildGenealogyLayout({ persons, parentChild, partnerships: [] }, "TB");
 }
 
 /** Build React Flow nodes + edges from a tree (always auto-laid-out). */
@@ -188,8 +473,8 @@ export function buildFlow(
   tree: TreeDTO,
   orientation: Orientation = "TB",
 ): { nodes: FlowNode[]; edges: Edge[] } {
-  const { positions, unions } = layoutTree(tree, orientation);
-  orderSiblingsByAge(positions, unions, tree.persons, orientation);
+  const positions = buildGenealogyLayout(tree, orientation, tree.selfPersonId);
+  const unions = computeUnions(tree);
 
   const isTB = orientation === "TB";
 
@@ -230,20 +515,20 @@ export function buildFlow(
     const avg = (sel: (c: Pos) => number) =>
       parentCenters.reduce((s, c) => s + sel(c), 0) / parentCenters.length;
 
-    // The junction sits on the couple's spouse bar (their shared center on the
-    // main axis, midpoint on the cross-axis), or on the lone parent's trailing
-    // edge. Nudge back by the handle offset so the child stem meets the bar.
+    // Children branch from the couple's cross-axis midpoint at its TRAILING
+    // edge (bottom in TB, right in LR) — not its center. Starting at the
+    // trailing edge keeps the stem's perpendicular run in the clear channel
+    // between generations; centering it (esp. in LR, where cards are wide on
+    // the main axis) pushes that run back inside the parent row, where it
+    // threads through the siblings flanking the couple. Nudge back by the
+    // handle offset so the connection point lands exactly on the edge.
     let jx: number;
     let jy: number;
     if (isTB) {
       jx = avg((c) => c.x);
-      jy =
-        (parents.length >= 2 ? avg((c) => c.y) : parentCenters[0].y + NODE_HEIGHT / 2) -
-        JUNCTION_HANDLE_OFFSET;
+      jy = avg((c) => c.y) + NODE_HEIGHT / 2 - JUNCTION_HANDLE_OFFSET;
     } else {
-      jx =
-        (parents.length >= 2 ? avg((c) => c.x) : parentCenters[0].x + NODE_WIDTH / 2) -
-        JUNCTION_HANDLE_OFFSET;
+      jx = avg((c) => c.x) + NODE_WIDTH / 2 - JUNCTION_HANDLE_OFFSET;
       jy = avg((c) => c.y);
     }
 
