@@ -150,6 +150,83 @@ function compareBirth(a: string | null, b: string | null): number {
   return ka < kb ? -1 : 1;
 }
 
+/**
+ * A "marriage group" of a spine person: one spouse plus the children they
+ * share. Children recorded with the spine as their ONLY parent are folded into
+ * the primary (first) marriage. Groups are ordered by their oldest child's age,
+ * so spouses sort by their children's ages; childless marriages sink to the end.
+ */
+export type MarriageGroup = { spouseId: string | null; childIds: string[] };
+
+/**
+ * Map every parent/partner to their ordered marriage groups. Shared by the
+ * layout (positions) and buildFlow (junction depths) so both order a person's
+ * marriages — and therefore stagger their child connectors — identically.
+ */
+export function computeMarriages(
+  tree: LayoutInput,
+): Map<string, MarriageGroup[]> {
+  const birthById = new Map<string, string | null>();
+  for (const p of tree.persons) birthById.set(p.id, p.birthDate ?? null);
+  const cmp = (a: string, b: string) =>
+    compareBirth(birthById.get(a) ?? null, birthById.get(b) ?? null);
+  const oldest = (ids: string[]) =>
+    ids.length ? birthById.get(ids[0]) ?? null : null;
+
+  const parentsByChild = new Map<string, string[]>();
+  const childrenByParent = new Map<string, string[]>();
+  const partnersOf = new Map<string, string[]>();
+  const push = (m: Map<string, string[]>, k: string, v: string) => {
+    const a = m.get(k);
+    if (a) a.push(v);
+    else m.set(k, [v]);
+  };
+  for (const { parentId, childId } of tree.parentChild) {
+    push(parentsByChild, childId, parentId);
+    push(childrenByParent, parentId, childId);
+  }
+  for (const pr of tree.partnerships) {
+    push(partnersOf, pr.partnerAId, pr.partnerBId);
+    push(partnersOf, pr.partnerBId, pr.partnerAId);
+  }
+
+  const result = new Map<string, MarriageGroup[]>();
+  const spines = new Set<string>([
+    ...partnersOf.keys(),
+    ...childrenByParent.keys(),
+  ]);
+  for (const spine of spines) {
+    const spouseIds = [...new Set(partnersOf.get(spine) ?? [])];
+    const kids = [...new Set(childrenByParent.get(spine) ?? [])];
+    const bySpouse = new Map<string, string[]>();
+    const singles: string[] = [];
+    for (const c of kids) {
+      const other = (parentsByChild.get(c) ?? []).find((p) => p !== spine);
+      if (other && spouseIds.includes(other)) push(bySpouse, other, c);
+      else singles.push(c);
+    }
+    const groups: MarriageGroup[] = spouseIds.map((sp) => ({
+      spouseId: sp,
+      childIds: (bySpouse.get(sp) ?? []).slice().sort(cmp),
+    }));
+    groups.sort((a, b) => compareBirth(oldest(a.childIds), oldest(b.childIds)));
+    // Children with no recorded second parent hang under the spine itself (a
+    // null-spouse group), kept separate so a polygamous spine never implies a
+    // wrong mother. A lone spine with only single-parent kids stays monogamous
+    // (one group) and keeps the classic look.
+    if (singles.length > 0) {
+      groups.push({ spouseId: null, childIds: singles.sort(cmp) });
+    }
+    result.set(spine, groups);
+  }
+  return result;
+}
+
+/** Distinct-spouse count that makes a spine use the polygamous arrangement. */
+function spouseCount(groups: MarriageGroup[] | undefined): number {
+  return groups ? groups.filter((g) => g.spouseId).length : 0;
+}
+
 // --- Genealogy layout constants -------------------------------------------
 // Gap between adjacent generations (between the near edges of two rows).
 const MAIN_GAP = 92;
@@ -207,20 +284,34 @@ export function buildGenealogyLayout(
   // Member order within a couple: oldest first (left in TB / top in LR).
   const orderedMembers = (u: Couple) => [...u.memberIds].sort(byBirth);
 
+  // Ordered marriage groups per person (shared with buildFlow). A spine uses the
+  // polygamous arrangement once it has two or more spouses; a lone single-parent
+  // group keeps the classic look.
+  const marriages = computeMarriages(tree);
+  const marriageGroupsOf = (spineId: string): MarriageGroup[] =>
+    marriages.get(spineId) ?? [];
+  const isPolygamous = (spineId: string) =>
+    spouseCount(marriages.get(spineId)) >= 2;
+
   const positions = new Map<string, Pos>();
   const visited = new Set<string>();
 
-  // Write a single card at a cross-axis center on a given generation row.
-  const place = (id: string, crossCenter: number, row: number) => {
-    const mainTop = row * mainStep;
+  // Write a single card at a cross-axis center on a given generation row, with
+  // an optional extra main-axis offset (`dy`, in px) — used to push a polygamous
+  // spine's whole descendant block down so its staggered marriage bars have room.
+  const place = (id: string, crossCenter: number, row: number, dy = 0) => {
+    const mainTop = row * mainStep + dy;
     const crossTop = crossCenter - crossCard / 2;
     positions.set(
       id,
       isTB ? { x: crossTop, y: mainTop } : { x: mainTop, y: crossTop },
     );
   };
+  // A child-unit plus the blood child (spine) that leads it — the spine drives
+  // the downward recursion so a polygamous child lays out its own marriages.
+  type ChildEntry = { unit: Couple; spine: string };
   // The child-units of a couple (units led by each of its children), age-ordered.
-  const childUnitsOf = (u: Couple): Couple[] => {
+  const childUnitsOf = (u: Couple): ChildEntry[] => {
     const kids: string[] = [];
     for (const m of u.memberIds) {
       for (const c of childrenByParent.get(m) ?? []) {
@@ -229,12 +320,12 @@ export function buildGenealogyLayout(
     }
     kids.sort(byBirth);
     const seen = new Set<string>();
-    const res: Couple[] = [];
+    const res: ChildEntry[] = [];
     for (const c of kids) {
       const cu = unitOf(c);
       if (!cu || seen.has(cu.id)) continue;
       seen.add(cu.id);
-      res.push(cu);
+      res.push({ unit: cu, spine: c });
     }
     return res;
   };
@@ -244,7 +335,7 @@ export function buildGenealogyLayout(
   // plus an `anchor` (the cross center of the block's key unit). Blocks compose
   // by shifting: every layout primitive returns one, so descendants, sibling
   // flanks, and ancestor bands all merge with the same arithmetic.
-  type BNode = { id: string; c: number; row: number };
+  type BNode = { id: string; c: number; row: number; dy?: number };
   type Block = { nodes: BNode[]; anchor: number };
   const shift = (b: Block, dx: number): Block => ({
     nodes: b.nodes.map((n) => ({ ...n, c: n.c + dx })),
@@ -294,22 +385,35 @@ export function buildGenealogyLayout(
   };
   // Units led by m's siblings (m's parents' other children), excluding m's own
   // unit and anything already placed.
-  const siblingUnits = (m: string, own: Couple): Couple[] => {
+  const siblingUnits = (m: string, own: Couple): ChildEntry[] => {
     const p = parentUnitOf(m);
     if (!p) return [];
-    return childUnitsOf(p).filter((su) => su.id !== own.id && !visited.has(su.id));
+    return childUnitsOf(p).filter(
+      (e) => e.unit.id !== own.id && !visited.has(e.unit.id),
+    );
   };
 
   // --- Downward tidy tree (descendants) ------------------------------------
   // Each subtree owns a disjoint cross interval, so nothing overlaps. The parent
   // couple is centered over its children comb.
-  const descBlock = (u: Couple, row: number): Block | null => {
+  //
+  // `spineId` is the blood descendant the subtree hangs from (defaults to the
+  // unit's first member). When that spine has 2+ spouses we switch to the
+  // polygamous arrangement (spine stays put, spouses stack to one side, each
+  // marriage's children grouped under its spouse).
+  const descBlock = (
+    u: Couple,
+    row: number,
+    spineId?: string,
+  ): Block | null => {
     if (visited.has(u.id)) return null;
+    const spine = spineId && u.memberIds.includes(spineId) ? spineId : u.memberIds[0];
+    if (isPolygamous(spine)) return descPolygamous(spine, u, row);
     visited.add(u.id);
     const self = unitBlock(u, row);
     const kids: Block[] = [];
-    for (const cu of childUnitsOf(u)) {
-      const b = descBlock(cu, row + 1);
+    for (const e of childUnitsOf(u)) {
+      const b = descBlock(e.unit, row + 1, e.spine);
       if (b) kids.push(b);
     }
     if (kids.length === 0) return self;
@@ -318,6 +422,74 @@ export function buildGenealogyLayout(
       (placed[0].anchor + placed[placed.length - 1].anchor) / 2;
     const s = shift(self, center - self.anchor);
     return { nodes: [...s.nodes, ...placed.flatMap((p) => p.nodes)], anchor: center };
+  };
+
+  // Polygamous spine: the spine and its spouses sit in one row as a chain
+  // (spine — wife1 — wife2 — …), and each marriage's children fill the GAP just
+  // before that wife. So the children of (spine, wifeᵢ) sit between the previous
+  // card and wifeᵢ, and hang straight down from that segment — exactly like a
+  // normal couple's children, one couple-bar per gap (drawn in buildFlow). All
+  // children stay on the single child row; the gaps widen to fit each comb.
+  const descPolygamous = (spine: string, u: Couple, row: number): Block => {
+    visited.add(u.id);
+    const groups = marriageGroupsOf(spine);
+    const nodes: BNode[] = [{ id: spine, c: 0, row }];
+
+    // Build a child comb (anchored at its own center).
+    const combOf = (childIds: string[]): Block | null => {
+      const kidBlocks: Block[] = [];
+      for (const cid of childIds) {
+        const cu = unitOf(cid);
+        if (!cu) continue;
+        const b = descBlock(cu, row + 1, cid);
+        if (b) kidBlocks.push(b);
+      }
+      if (kidBlocks.length === 0) return null;
+      const { placed } = packRow(kidBlocks);
+      return { nodes: placed.flatMap((p) => p.nodes), anchor: 0 };
+    };
+    const placeCombAt = (comb: Block, center: number) => {
+      const [lo, hi] = extent(comb);
+      const dx = center - (lo + hi) / 2;
+      for (const n of comb.nodes) nodes.push({ ...n, c: n.c + dx });
+    };
+    const widthOf = (comb: Block) => {
+      const [lo, hi] = extent(comb);
+      return hi - lo;
+    };
+
+    // `cursor` tracks the running right edge along the spouse row.
+    let cursor = crossCard / 2; // spine's right edge (spine center = 0)
+
+    // Children with no recorded second parent hang directly under the spine.
+    const single = groups.find((g) => !g.spouseId);
+    if (single) {
+      const comb = combOf(single.childIds);
+      if (comb) {
+        placeCombAt(comb, 0);
+        cursor = Math.max(cursor, widthOf(comb) / 2);
+      }
+    }
+
+    // Each marriage's comb fills the gap, then its wife card follows.
+    for (const g of groups) {
+      if (!g.spouseId) continue;
+      const su = unitOf(g.spouseId);
+      if (su) visited.add(su.id);
+      const comb = combOf(g.childIds);
+      if (comb) {
+        const w = widthOf(comb);
+        const combCenter = cursor + SIBLING_GAP + w / 2;
+        placeCombAt(comb, combCenter);
+        cursor = combCenter + w / 2 + SIBLING_GAP;
+      } else {
+        cursor += SPOUSE_GAP;
+      }
+      const wifeCenter = cursor + crossCard / 2;
+      nodes.push({ id: g.spouseId, c: wifeCenter, row });
+      cursor = wifeCenter + crossCard / 2;
+    }
+    return { nodes, anchor: 0 };
   };
 
   // --- Upward lineage (ancestors + collaterals) ----------------------------
@@ -355,7 +527,7 @@ export function buildGenealogyLayout(
       // flank's descendants clear the spine's children-row. The "group" is the
       // flank plus the member card.
       const lf = siblingUnits(mL, u)
-        .map((su) => descBlock(su, row))
+        .map((e) => descBlock(e.unit, row, e.spine))
         .filter((b): b is Block => b !== null);
       const leftClear = Math.min(-d - crossCard / 2, -reserveLeft);
       let leftGroupLo = -d - crossCard / 2;
@@ -370,7 +542,7 @@ export function buildGenealogyLayout(
       // Right member's siblings, packed just right of its card (and clear of the
       // reserved central interval).
       const rf = siblingUnits(mR, u)
-        .map((su) => descBlock(su, row))
+        .map((e) => descBlock(e.unit, row, e.spine))
         .filter((b): b is Block => b !== null);
       const rightClear = Math.max(d + crossCard / 2, reserveRight);
       const rightGroupLo = d - crossCard / 2;
@@ -423,10 +595,10 @@ export function buildGenealogyLayout(
     const m = order[0];
     const sibs = siblingUnits(m, u);
     type Item = { birth: string | null; block?: Block };
-    const items: Item[] = sibs.map((su) => {
-      const blood = su.memberIds.find((x) => parentUnitOf(x)?.id === parentUnitOf(m)?.id) ?? su.memberIds[0];
-      return { birth: birthById.get(blood) ?? null, block: descBlock(su, row) ?? undefined };
-    });
+    const items: Item[] = sibs.map((e) => ({
+      birth: birthById.get(e.spine) ?? null,
+      block: descBlock(e.unit, row, e.spine) ?? undefined,
+    }));
     items.push({ birth: birthById.get(m) ?? null });
     items.sort((a, b) => compareBirth(a.birth, b.birth));
     let cursor = 0;
@@ -477,12 +649,12 @@ export function buildGenealogyLayout(
 
   if (focal) {
     // Descendants (incl. focal cards) centered at cross 0.
-    const desc = descBlock(focal, 0);
+    const desc = descBlock(focal, 0, selfPersonId ?? undefined);
     const descCentered = desc ? shift(desc, -desc.anchor) : null;
     // Siblings + ancestors around the focal, sharing the same cross-0 center.
     const around = buildAround(focal, 0, false);
     const all = [...(descCentered?.nodes ?? []), ...around.nodes];
-    for (const n of all) place(n.id, n.c, n.row);
+    for (const n of all) place(n.id, n.c, n.row, n.dy ?? 0);
   }
 
   // Seat additional / former spouses right beside their already-placed partner
@@ -570,23 +742,144 @@ export function buildFlow(
   const edgeStyle = { stroke: "var(--border)", strokeWidth: 1.5 };
   const junctionNodes: FlowNode[] = [];
 
+  // Marriage ordering (shared with the layout) so a polygamous parent's child
+  // connectors are staggered in the same order the spouses are laid out.
+  const marriages = computeMarriages(tree);
+  // The polygamous spine of a union (the parent with 2+ spouses), or null.
+  const polySpineOf = (parentIds: string[]): string | null => {
+    for (const p of parentIds) if (spouseCount(marriages.get(p)) >= 2) return p;
+    return null;
+  };
+  // Real partnerships whose own bar we suppress because the marriage is drawn as
+  // a chain-segment bar instead (polygamous spines).
+  const suppressedPartnerships = new Set<string>();
+
   // Junction per union: children hang from a single branching point.
   for (const u of unions) {
     const parents = u.parentIds.filter((id) => positions.has(id));
     const children = u.childIds.filter((id) => positions.has(id));
-    if (parents.length === 0 || children.length === 0) continue;
+    if (parents.length === 0) continue;
 
     const parentCenters = parents.map(center);
     const avg = (sel: (c: Pos) => number) =>
       parentCenters.reduce((s, c) => s + sel(c), 0) / parentCenters.length;
+    const childCenters = children.map(center);
+    const childAvg = (sel: (c: Pos) => number) =>
+      childCenters.length
+        ? childCenters.reduce((s, c) => s + sel(c), 0) / childCenters.length
+        : avg(sel);
 
+    const jid = unionNodeId(u.key);
+    const spine = polySpineOf(u.parentIds);
+
+    // A classic childless couple is shown by its spouse bar alone; only
+    // polygamous marriages need an explicit (possibly childless) junction.
+    if (children.length === 0 && !spine) continue;
+
+    if (spine) {
+      // --- Polygamous marriage: one couple-bar per chain gap ----------------
+      // The spine and its spouses form a row chain (spine — wife1 — wife2 — …).
+      // THIS marriage's children fill the gap just before its wife, so we render
+      // the segment between the previous chain card and the wife as an ordinary
+      // couple bar with the children hanging straight down from it — identical
+      // to a normal couple, just chained. Single-parent kids hang under the spine.
+      const wives = (marriages.get(spine) ?? [])
+        .filter((g) => g.spouseId)
+        .map((g) => g.spouseId as string);
+      const spouseId = u.parentIds.find((p) => p !== spine) ?? null;
+      let segLeft = spine;
+      if (spouseId) {
+        const wi = wives.indexOf(spouseId);
+        segLeft = wi > 0 ? wives[wi - 1] : spine;
+      }
+      const segIds = (spouseId ? [segLeft, spouseId] : [spine]).filter((id) =>
+        positions.has(id),
+      );
+      const segAvg = (sel: (c: Pos) => number) =>
+        segIds.map(center).reduce((s, c) => s + sel(c), 0) / segIds.length;
+
+      // Junction at the segment's trailing edge, centered over the children.
+      let jx: number;
+      let jy: number;
+      if (isTB) {
+        jx = children.length ? childAvg((c) => c.x) : segAvg((c) => c.x);
+        jy = segAvg((c) => c.y) + NODE_HEIGHT / 2 - JUNCTION_HANDLE_OFFSET;
+      } else {
+        jx = segAvg((c) => c.x) + NODE_WIDTH / 2 - JUNCTION_HANDLE_OFFSET;
+        jy = children.length ? childAvg((c) => c.y) : segAvg((c) => c.y);
+      }
+      junctionNodes.push({
+        id: jid,
+        type: "junction",
+        position: { x: jx, y: jy },
+        data: {},
+        draggable: false,
+        selectable: false,
+      });
+
+      // The chain bar between the two consecutive cards, bridged to the junction
+      // (just like a normal couple). The real partnership's own bar is suppressed
+      // below so we don't also draw spine→wife across the intervening cards.
+      if (spouseId && positions.has(segLeft) && positions.has(spouseId)) {
+        const mx = isTB ? jx : segAvg((c) => c.x);
+        const my = isTB ? segAvg((c) => c.y) : jy;
+        const mid = `m:${u.key}`;
+        junctionNodes.push({
+          id: mid,
+          type: "junction",
+          position: { x: mx, y: my },
+          data: {},
+          draggable: false,
+          selectable: false,
+        });
+        edges.push({
+          id: `mj:${u.key}`,
+          source: mid,
+          target: jid,
+          sourceHandle: isTB ? "out-bottom" : "out-right",
+          targetHandle: isTB ? "in-top" : "in-left",
+          type: "straight",
+          style: edgeStyle,
+        });
+        const lFirst = isTB
+          ? center(segLeft).x <= center(spouseId).x
+          : center(segLeft).y <= center(spouseId).y;
+        const [first, second] = lFirst ? [segLeft, spouseId] : [spouseId, segLeft];
+        const pr = tree.partnerships.find(
+          (p) => unionKey([p.partnerAId, p.partnerBId]) === u.key,
+        );
+        edges.push({
+          id: `sp:${u.key}`,
+          source: first,
+          target: second,
+          sourceHandle: isTB ? "right" : "bottom",
+          targetHandle: isTB ? "left" : "top",
+          type: "smoothstep",
+          data: { spouse: true },
+          selectable: false,
+          style: pr && !pr.current ? { ...edgeStyle, strokeDasharray: "5 4" } : edgeStyle,
+        });
+        suppressedPartnerships.add(unionKey([spine, spouseId]));
+      }
+
+      for (const cid of children) {
+        edges.push({
+          id: `pc:${u.key}:${cid}`,
+          source: jid,
+          target: cid,
+          sourceHandle: isTB ? "out-bottom" : "out-right",
+          targetHandle: isTB ? "top" : "left",
+          type: "smoothstep",
+          style: edgeStyle,
+        });
+      }
+      continue;
+    }
+
+    // --- Classic couple / single parent -------------------------------------
     // Children branch from the couple's cross-axis midpoint at its TRAILING
-    // edge (bottom in TB, right in LR) — not its center. Starting at the
-    // trailing edge keeps the stem's perpendicular run in the clear channel
-    // between generations; centering it (esp. in LR, where cards are wide on
-    // the main axis) pushes that run back inside the parent row, where it
-    // threads through the siblings flanking the couple. Nudge back by the
-    // handle offset so the connection point lands exactly on the edge.
+    // edge (bottom in TB, right in LR) — not its center, keeping the stem's
+    // run in the clear channel between generations.
     let jx: number;
     let jy: number;
     if (isTB) {
@@ -597,7 +890,6 @@ export function buildFlow(
       jy = avg((c) => c.y);
     }
 
-    const jid = unionNodeId(u.key);
     junctionNodes.push({
       id: jid,
       type: "junction",
@@ -608,10 +900,8 @@ export function buildFlow(
     });
 
     // For a couple, the spouse bar sits at the couple's main-axis CENTER while
-    // the child junction sits at its TRAILING edge (so the stem clears the
-    // sibling column). Bridge the two with a short straight connector so the
-    // parent relationship line and the parent-child stem form one continuous
-    // line with no gap. Single parents have no spouse bar, so they're skipped.
+    // the child junction sits at its TRAILING edge; bridge the two so the
+    // relationship line and the parent-child stem form one continuous line.
     if (parents.length === 2) {
       const mx = isTB ? jx : avg((c) => c.x);
       const my = isTB ? avg((c) => c.y) : jy;
@@ -649,13 +939,15 @@ export function buildFlow(
   }
 
   // Spouse bars: along the cross-axis (horizontal for TB, vertical for LR),
-  // drawn leading->trailing so the connector never reverses.
+  // drawn leading->trailing so the connector never reverses. Polygamous
+  // marriages are skipped here — they are shown by their chain-segment bars.
   for (const pair of tree.partnerships) {
     if (!positions.has(pair.partnerAId) || !positions.has(pair.partnerBId)) {
       continue;
     }
     const a = pair.partnerAId;
     const b = pair.partnerBId;
+    if (suppressedPartnerships.has(unionKey([a, b]))) continue;
     const aFirst = isTB
       ? center(a).x <= center(b).x
       : center(a).y <= center(b).y;

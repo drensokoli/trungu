@@ -70,7 +70,33 @@ export async function PATCH(req: Request, { params }: Params) {
       data.deathPlace = input.deathPlace?.trim() || null;
   }
 
-  await prisma.person.update({ where: { id }, data });
+  // Optional: reassign this person's parents (map a child to the right spouse).
+  let parentIds: string[] | null = null;
+  if (input.parents !== undefined) {
+    const unique = [...new Set(input.parents.filter((p) => p && p !== id))];
+    if (unique.length > 0) {
+      const found = await prisma.person.findMany({
+        where: { id: { in: unique }, treeId },
+        select: { id: true },
+      });
+      if (found.length !== unique.length) {
+        return NextResponse.json({ error: "Invalid parent" }, { status: 400 });
+      }
+    }
+    parentIds = unique;
+  }
+
+  await prisma.$transaction(async (tx) => {
+    await tx.person.update({ where: { id }, data });
+    if (parentIds !== null) {
+      await tx.parentChild.deleteMany({ where: { childId: id } });
+      if (parentIds.length > 0) {
+        await tx.parentChild.createMany({
+          data: parentIds.map((pid) => ({ parentId: pid, childId: id })),
+        });
+      }
+    }
+  });
   return NextResponse.json({ ok: true });
 }
 

@@ -58,6 +58,10 @@ export const addPersonSchema = z.object({
   person: personSchema,
   // Only meaningful when relation === "spouse": is this a current partner?
   current: z.boolean().default(true),
+  // Only meaningful when relation === "child" and the source has 2+ spouses:
+  // which spouse co-parents this child. "" = single parent (source only);
+  // undefined = fall back to auto-linking the source's sole partner.
+  otherParentId: z.string().optional(),
 });
 export type AddPersonInput = z.infer<typeof addPersonSchema>;
 
@@ -72,5 +76,8 @@ export const updatePersonSchema = z.object({
   deathPlace: z.string().trim().max(160).nullable().optional(),
   positionX: z.number().optional(),
   positionY: z.number().optional(),
+  // Reassign this person's parents (0–2 ids, all in the same tree). Used to map
+  // a child to the right spouse when a parent has multiple marriages.
+  parents: z.array(z.string()).max(2).optional(),
 });
 export type UpdatePersonInput = z.infer<typeof updatePersonSchema>;

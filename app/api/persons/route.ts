@@ -26,7 +26,8 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  const { sourcePersonId, relation, person, current } = parsed.data;
+  const { sourcePersonId, relation, person, current, otherParentId } =
+    parsed.data;
 
   const source = await prisma.person.findFirst({
     where: { id: sourcePersonId, tree: { ownerId: session.user.id } },
@@ -35,6 +36,23 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: "Person not found" }, { status: 404 });
   }
   const treeId = source.treeId;
+
+  // When the caller picks a specific co-parent (a source with multiple spouses),
+  // validate it belongs to the same tree before linking it.
+  let coParentId: string | null = null;
+  if (relation === "child" && otherParentId) {
+    const partner = await prisma.person.findFirst({
+      where: { id: otherParentId, treeId },
+      select: { id: true },
+    });
+    if (!partner) {
+      return NextResponse.json(
+        { error: "Other parent not found" },
+        { status: 400 },
+      );
+    }
+    coParentId = partner.id;
+  }
 
   // A person can have at most two parents.
   if (relation === "parent") {
@@ -99,17 +117,21 @@ export async function POST(req: Request) {
       await tx.parentChild.create({
         data: { parentId: source.id, childId: created.id },
       });
-      // Co-parent: if the source has a partner, link them as a parent too.
-      const partnership = await tx.partnership.findFirst({
-        where: {
-          OR: [{ partnerAId: source.id }, { partnerBId: source.id }],
-        },
-      });
-      if (partnership) {
-        const partnerId =
-          partnership.partnerAId === source.id
-            ? partnership.partnerBId
-            : partnership.partnerAId;
+      // Co-parent. An explicit choice (incl. "single parent" = "") wins; only
+      // when the caller says nothing do we auto-link the source's sole partner —
+      // and only if there's exactly one, so a polygamous parent never guesses.
+      let partnerId: string | null = coParentId;
+      if (otherParentId === undefined) {
+        const partnerships = await tx.partnership.findMany({
+          where: { OR: [{ partnerAId: source.id }, { partnerBId: source.id }] },
+        });
+        if (partnerships.length === 1) {
+          const pr = partnerships[0];
+          partnerId =
+            pr.partnerAId === source.id ? pr.partnerBId : pr.partnerAId;
+        }
+      }
+      if (partnerId) {
         await tx.parentChild.create({
           data: { parentId: partnerId, childId: created.id },
         });

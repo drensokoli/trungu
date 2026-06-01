@@ -181,6 +181,7 @@ function Canvas({ initialTree }: { initialTree: TreeDTO }) {
 
         <PersonFormDialog
           state={dialog}
+          tree={tree}
           onClose={() => setDialog(null)}
           onSaved={refresh}
         />
