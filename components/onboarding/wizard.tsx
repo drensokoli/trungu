@@ -6,7 +6,10 @@ import { FormProvider, useForm } from "react-hook-form";
 import { ArrowLeft, ArrowRight, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LanguageToggle } from "@/components/language-toggle";
 import { PersonFields } from "./person-fields";
+import { useT } from "@/lib/i18n";
+import type { DictKey } from "@/lib/dictionaries";
 import type { OnboardingInput, PersonInput } from "@/lib/validations";
 
 const emptyPerson = (sex: PersonInput["sex"]): PersonInput => ({
@@ -20,7 +23,11 @@ const emptyPerson = (sex: PersonInput["sex"]): PersonInput => ({
   deathPlace: "",
 });
 
-const STEPS = ["You", "Parents", "Grandparents"] as const;
+const STEP_KEYS: DictKey[] = [
+  "onb.step.you",
+  "onb.step.parents",
+  "onb.step.grandparents",
+];
 
 function Section({
   title,
@@ -45,6 +52,7 @@ export function OnboardingWizard({
   initialLastName: string;
 }) {
   const router = useRouter();
+  const t = useT();
   const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -65,12 +73,9 @@ export function OnboardingWizard({
 
   function validateStep(current: number): string | null {
     const v = getValues();
+    // Only "you" is required; parents and grandparents are optional and can be skipped.
     if (current === 0 && !v.self.firstName?.trim())
-      return "Please enter your first name.";
-    if (current === 1) {
-      if (!v.mother.firstName?.trim()) return "Please enter your mother's first name.";
-      if (!v.father.firstName?.trim()) return "Please enter your father's first name.";
-    }
+      return t("onb.err.firstName");
     return null;
   }
 
@@ -81,7 +86,7 @@ export function OnboardingWizard({
       return;
     }
     setError(null);
-    setStep((s) => Math.min(s + 1, STEPS.length - 1));
+    setStep((s) => Math.min(s + 1, STEP_KEYS.length - 1));
   }
 
   function back() {
@@ -90,7 +95,7 @@ export function OnboardingWizard({
   }
 
   async function onSubmit() {
-    for (let i = 0; i < STEPS.length; i++) {
+    for (let i = 0; i < STEP_KEYS.length; i++) {
       const err = validateStep(i);
       if (err) {
         setStep(i);
@@ -123,7 +128,7 @@ export function OnboardingWizard({
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error ?? "Something went wrong");
+        setError(data.error ?? t("common.somethingWrong"));
         return;
       }
       router.push("/tree");
@@ -139,19 +144,26 @@ export function OnboardingWizard({
         <header className="mb-6 flex items-center justify-between">
           <div>
             <h1 className="text-xl font-semibold tracking-tight">
-              Build your family tree
+              {t("onb.title")}
             </h1>
             <p className="text-sm text-muted">
-              Step {step + 1} of {STEPS.length} — {STEPS[step]}
+              {t("onb.step", {
+                n: step + 1,
+                total: STEP_KEYS.length,
+                label: t(STEP_KEYS[step]),
+              })}
             </p>
           </div>
-          <ThemeToggle />
+          <div className="flex items-center gap-2">
+            <LanguageToggle />
+            <ThemeToggle />
+          </div>
         </header>
 
         {/* Progress */}
         <div className="mb-6 flex gap-2">
-          {STEPS.map((label, i) => (
-            <div key={label} className="flex flex-1 flex-col gap-1.5">
+          {STEP_KEYS.map((key, i) => (
+            <div key={key} className="flex flex-1 flex-col gap-1.5">
               <div
                 className={`h-1.5 rounded-full ${
                   i <= step ? "bg-accent" : "bg-border"
@@ -162,7 +174,7 @@ export function OnboardingWizard({
                   i <= step ? "text-foreground" : "text-muted"
                 }`}
               >
-                {label}
+                {t(key)}
               </span>
             </div>
           ))}
@@ -170,17 +182,18 @@ export function OnboardingWizard({
 
         <div className="flex-1">
           {step === 0 && (
-            <Section title="Your details">
+            <Section title={t("onb.yourDetails")}>
               <PersonFields prefix="self" idPrefix="self" />
             </Section>
           )}
 
           {step === 1 && (
             <div className="flex flex-col gap-4">
-              <Section title="Mother">
+              <p className="text-sm text-muted">{t("onb.parentsHint")}</p>
+              <Section title={t("onb.mother")}>
                 <PersonFields prefix="mother" idPrefix="mother" />
               </Section>
-              <Section title="Father">
+              <Section title={t("onb.father")}>
                 <PersonFields prefix="father" idPrefix="father" />
               </Section>
             </div>
@@ -188,19 +201,17 @@ export function OnboardingWizard({
 
           {step === 2 && (
             <div className="flex flex-col gap-4">
-              <p className="text-sm text-muted">
-                Add any grandparents you know. Leave a section blank to skip it.
-              </p>
-              <Section title="Maternal grandmother">
+              <p className="text-sm text-muted">{t("onb.grandparentsHint")}</p>
+              <Section title={t("onb.mgm")}>
                 <PersonFields prefix="maternalGrandmother" idPrefix="mgm" />
               </Section>
-              <Section title="Maternal grandfather">
+              <Section title={t("onb.mgf")}>
                 <PersonFields prefix="maternalGrandfather" idPrefix="mgf" />
               </Section>
-              <Section title="Paternal grandmother">
+              <Section title={t("onb.pgm")}>
                 <PersonFields prefix="paternalGrandmother" idPrefix="pgm" />
               </Section>
-              <Section title="Paternal grandfather">
+              <Section title={t("onb.pgf")}>
                 <PersonFields prefix="paternalGrandfather" idPrefix="pgf" />
               </Section>
             </div>
@@ -216,16 +227,16 @@ export function OnboardingWizard({
             onClick={back}
             disabled={step === 0 || submitting}
           >
-            <ArrowLeft className="h-4 w-4" /> Back
+            <ArrowLeft className="h-4 w-4" /> {t("onb.back")}
           </Button>
 
-          {step < STEPS.length - 1 ? (
+          {step < STEP_KEYS.length - 1 ? (
             <Button type="button" onClick={next}>
-              Continue <ArrowRight className="h-4 w-4" />
+              {t("onb.continue")} <ArrowRight className="h-4 w-4" />
             </Button>
           ) : (
             <Button type="button" onClick={onSubmit} loading={submitting}>
-              <Check className="h-4 w-4" /> Create my tree
+              <Check className="h-4 w-4" /> {t("onb.create")}
             </Button>
           )}
         </footer>

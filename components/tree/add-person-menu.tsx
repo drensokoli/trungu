@@ -1,6 +1,6 @@
 "use client";
 
-import { ArrowUp, ArrowDown, Plus, Users } from "lucide-react";
+import { ArrowUp, ArrowDown, Heart, Plus, Users } from "lucide-react";
 import { useState } from "react";
 import {
   Popover,
@@ -8,12 +8,15 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { useTreeActions } from "./tree-context";
+import { useT } from "@/lib/i18n";
+import type { DictKey } from "@/lib/dictionaries";
 import type { Relation } from "@/lib/validations";
 
-const ITEMS: { relation: Relation; label: string; icon: React.ReactNode }[] = [
-  { relation: "parent", label: "Add parent", icon: <ArrowUp className="h-4 w-4" /> },
-  { relation: "sibling", label: "Add sibling", icon: <Users className="h-4 w-4" /> },
-  { relation: "child", label: "Add child", icon: <ArrowDown className="h-4 w-4" /> },
+const ITEMS: { relation: Relation; labelKey: DictKey; icon: React.ReactNode }[] = [
+  { relation: "parent", labelKey: "add.parent", icon: <ArrowUp className="h-4 w-4" /> },
+  { relation: "sibling", labelKey: "add.sibling", icon: <Users className="h-4 w-4" /> },
+  { relation: "spouse", labelKey: "add.spouse", icon: <Heart className="h-4 w-4" /> },
+  { relation: "child", labelKey: "add.child", icon: <ArrowDown className="h-4 w-4" /> },
 ];
 
 export function AddPersonMenu({
@@ -24,6 +27,7 @@ export function AddPersonMenu({
   canAddParent?: boolean;
 }) {
   const { onAdd } = useTreeActions();
+  const t = useT();
   const [open, setOpen] = useState(false);
 
   const items = canAddParent
@@ -35,7 +39,7 @@ export function AddPersonMenu({
       <PopoverTrigger asChild>
         <button
           type="button"
-          aria-label="Add relative"
+          aria-label={t("add.relative")}
           data-add-trigger={sourcePersonId}
           className="nodrag flex h-6 w-6 items-center justify-center rounded-full border border-border bg-surface text-muted shadow-sm transition-colors hover:border-accent hover:bg-accent hover:text-accent-foreground"
           onClick={(e) => e.stopPropagation()}
@@ -56,7 +60,7 @@ export function AddPersonMenu({
             }}
           >
             <span className="text-muted">{item.icon}</span>
-            {item.label}
+            {t(item.labelKey)}
           </button>
         ))}
       </PopoverContent>

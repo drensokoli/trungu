@@ -42,38 +42,47 @@ export async function POST(req: Request) {
       tx.person.create({ data: { ...data, treeId: tree.id } });
 
     const self = await create(personInputToData(input.self));
-    const mother = await create(personInputToData(input.mother));
-    const father = await create(personInputToData(input.father));
 
-    const parentChild: { parentId: string; childId: string }[] = [
-      { parentId: mother.id, childId: self.id },
-      { parentId: father.id, childId: self.id },
-    ];
-    const partnerships: { partnerAId: string; partnerBId: string }[] = [
-      { partnerAId: father.id, partnerBId: mother.id },
-    ];
+    const parentChild: { parentId: string; childId: string }[] = [];
+    const partnerships: { partnerAId: string; partnerBId: string }[] = [];
 
-    // Maternal grandparents
-    const mgm = isPersonProvided(input.maternalGrandmother)
-      ? await create(personInputToData(input.maternalGrandmother))
+    // Parents are optional — only create the ones that were filled in.
+    const mother = isPersonProvided(input.mother)
+      ? await create(personInputToData(input.mother))
       : null;
-    const mgf = isPersonProvided(input.maternalGrandfather)
-      ? await create(personInputToData(input.maternalGrandfather))
+    const father = isPersonProvided(input.father)
+      ? await create(personInputToData(input.father))
       : null;
-    if (mgm) parentChild.push({ parentId: mgm.id, childId: mother.id });
-    if (mgf) parentChild.push({ parentId: mgf.id, childId: mother.id });
+    if (mother) parentChild.push({ parentId: mother.id, childId: self.id });
+    if (father) parentChild.push({ parentId: father.id, childId: self.id });
+    if (mother && father)
+      partnerships.push({ partnerAId: father.id, partnerBId: mother.id });
+
+    // Maternal grandparents (only meaningful when the mother exists)
+    const mgm =
+      mother && isPersonProvided(input.maternalGrandmother)
+        ? await create(personInputToData(input.maternalGrandmother))
+        : null;
+    const mgf =
+      mother && isPersonProvided(input.maternalGrandfather)
+        ? await create(personInputToData(input.maternalGrandfather))
+        : null;
+    if (mother && mgm) parentChild.push({ parentId: mgm.id, childId: mother.id });
+    if (mother && mgf) parentChild.push({ parentId: mgf.id, childId: mother.id });
     if (mgm && mgf)
       partnerships.push({ partnerAId: mgf.id, partnerBId: mgm.id });
 
-    // Paternal grandparents
-    const pgm = isPersonProvided(input.paternalGrandmother)
-      ? await create(personInputToData(input.paternalGrandmother))
-      : null;
-    const pgf = isPersonProvided(input.paternalGrandfather)
-      ? await create(personInputToData(input.paternalGrandfather))
-      : null;
-    if (pgm) parentChild.push({ parentId: pgm.id, childId: father.id });
-    if (pgf) parentChild.push({ parentId: pgf.id, childId: father.id });
+    // Paternal grandparents (only meaningful when the father exists)
+    const pgm =
+      father && isPersonProvided(input.paternalGrandmother)
+        ? await create(personInputToData(input.paternalGrandmother))
+        : null;
+    const pgf =
+      father && isPersonProvided(input.paternalGrandfather)
+        ? await create(personInputToData(input.paternalGrandfather))
+        : null;
+    if (father && pgm) parentChild.push({ parentId: pgm.id, childId: father.id });
+    if (father && pgf) parentChild.push({ parentId: pgf.id, childId: father.id });
     if (pgm && pgf)
       partnerships.push({ partnerAId: pgf.id, partnerBId: pgm.id });
 

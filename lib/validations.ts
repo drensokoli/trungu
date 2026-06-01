@@ -3,11 +3,14 @@ import { z } from "zod";
 export const sexEnum = z.enum(["MALE", "FEMALE", "UNKNOWN"]);
 export type Sex = z.infer<typeof sexEnum>;
 
-// A date string in YYYY-MM-DD form from <input type="date">, or empty.
+// A flexible date token: optional "~" (approximate) + YYYY | YYYY-MM | YYYY-MM-DD,
+// covering year-only, month, and full-day precision. Empty means "unknown".
+const FLEX_DATE_RE =
+  /^~?\d{4}(?:-(?:0[1-9]|1[0-2])(?:-(?:0[1-9]|[12]\d|3[01]))?)?$/;
 const dateString = z
   .string()
   .trim()
-  .regex(/^\d{4}-\d{2}-\d{2}$/, "Use a valid date")
+  .refine((v) => v === "" || FLEX_DATE_RE.test(v), "Use a valid date")
   .optional()
   .or(z.literal(""));
 
@@ -29,8 +32,8 @@ const optionalPerson = personSchema.optional();
 
 export const onboardingSchema = z.object({
   self: personSchema,
-  mother: personSchema,
-  father: personSchema,
+  mother: optionalPerson,
+  father: optionalPerson,
   maternalGrandmother: optionalPerson,
   maternalGrandfather: optionalPerson,
   paternalGrandmother: optionalPerson,
@@ -46,13 +49,15 @@ export const signupSchema = z.object({
 });
 export type SignupInput = z.infer<typeof signupSchema>;
 
-export const relationEnum = z.enum(["parent", "sibling", "child"]);
+export const relationEnum = z.enum(["parent", "sibling", "child", "spouse"]);
 export type Relation = z.infer<typeof relationEnum>;
 
 export const addPersonSchema = z.object({
   sourcePersonId: z.string().min(1),
   relation: relationEnum,
   person: personSchema,
+  // Only meaningful when relation === "spouse": is this a current partner?
+  current: z.boolean().default(true),
 });
 export type AddPersonInput = z.infer<typeof addPersonSchema>;
 

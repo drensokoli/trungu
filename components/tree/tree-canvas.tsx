@@ -16,6 +16,8 @@ import { LogOut, Network, TreePine } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ThemeToggle } from "@/components/theme-toggle";
+import { LanguageToggle } from "@/components/language-toggle";
+import { useT } from "@/lib/i18n";
 import {
   buildFlow,
   computeTranslateExtent,
@@ -47,15 +49,17 @@ function Canvas({ initialTree }: { initialTree: TreeDTO }) {
   const [dialog, setDialog] = useState<DialogState>(null);
   const [details, setDetails] = useState<PersonDTO | null>(null);
   const { fitView } = useReactFlow();
+  const t = useT();
 
   const applyTree = useCallback(
-    (next: TreeDTO, orient: Orientation = orientation) => {
+    (next: TreeDTO, orient: Orientation = orientation, fit = true) => {
       setTree(next);
       const { nodes: n, edges: e } = buildFlow(next, orient);
       setNodes(n);
       setEdges(e);
       setExtent(computeTranslateExtent(n));
-      window.setTimeout(() => fitView({ duration: 400, padding: 0.2 }), 60);
+      if (fit)
+        window.setTimeout(() => fitView({ duration: 400, padding: 0.2 }), 60);
     },
     [fitView, setNodes, setEdges, orientation],
   );
@@ -63,16 +67,17 @@ function Canvas({ initialTree }: { initialTree: TreeDTO }) {
   const toggleOrientation = useCallback(() => {
     const next: Orientation = orientation === "TB" ? "LR" : "TB";
     setOrientation(next);
-    applyTree(tree, next);
+    applyTree(tree, next, true);
   }, [orientation, tree, applyTree]);
 
   const refresh = useCallback(async () => {
     const res = await fetch("/api/tree");
     if (res.ok) {
       const data = await res.json();
-      applyTree(data.tree as TreeDTO);
+      // Keep the user's current zoom/pan after add/edit/delete — don't recenter.
+      applyTree(data.tree as TreeDTO, orientation, false);
     }
-  }, [applyTree]);
+  }, [applyTree, orientation]);
 
   const onAdd = useCallback((sourcePersonId: string, relation: Relation) => {
     setDetails(null);
@@ -111,13 +116,13 @@ function Canvas({ initialTree }: { initialTree: TreeDTO }) {
               size="icon"
               aria-label={
                 orientation === "TB"
-                  ? "Switch to horizontal layout"
-                  : "Switch to vertical layout"
+                  ? t("toolbar.toHorizontal")
+                  : t("toolbar.toVertical")
               }
               title={
                 orientation === "TB"
-                  ? "Switch to horizontal layout"
-                  : "Switch to vertical layout"
+                  ? t("toolbar.toHorizontal")
+                  : t("toolbar.toVertical")
               }
               onClick={toggleOrientation}
             >
@@ -127,11 +132,12 @@ function Canvas({ initialTree }: { initialTree: TreeDTO }) {
                 }`}
               />
             </Button>
+            <LanguageToggle />
             <ThemeToggle />
             <Button
               variant="ghost"
               size="icon"
-              aria-label="Sign out"
+              aria-label={t("toolbar.signOut")}
               onClick={() => signOut({ callbackUrl: "/login" })}
             >
               <LogOut className="h-[18px] w-[18px]" />

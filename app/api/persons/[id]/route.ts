@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { auth } from "@/lib/auth";
 import { updatePersonSchema } from "@/lib/validations";
-import { parseDateString } from "@/lib/person-data";
+import { dateFieldsFromToken } from "@/lib/person-data";
 import { getOwnedPersonTreeId } from "@/lib/tree-db";
 
 type Params = { params: Promise<{ id: string }> };
@@ -39,8 +39,12 @@ export async function PATCH(req: Request, { params }: Params) {
   if (input.firstName !== undefined) data.firstName = input.firstName.trim();
   if (input.lastName !== undefined) data.lastName = input.lastName?.trim() || null;
   if (input.sex !== undefined) data.sex = input.sex;
-  if (input.birthDate !== undefined)
-    data.birthDate = input.birthDate ? parseDateString(input.birthDate) : null;
+  if (input.birthDate !== undefined) {
+    const b = dateFieldsFromToken(input.birthDate);
+    data.birthDate = b.date;
+    data.birthPrecision = b.precision;
+    data.birthApprox = b.approx;
+  }
   if (input.birthPlace !== undefined)
     data.birthPlace = input.birthPlace?.trim() || null;
   if (input.positionX !== undefined) data.positionX = input.positionX;
@@ -50,12 +54,18 @@ export async function PATCH(req: Request, { params }: Params) {
     data.deceased = input.deceased;
     if (input.deceased === false) {
       data.deathDate = null;
+      data.deathPrecision = "DAY";
+      data.deathApprox = false;
       data.deathPlace = null;
     }
   }
   if (data.deceased !== false) {
-    if (input.deathDate !== undefined)
-      data.deathDate = input.deathDate ? parseDateString(input.deathDate) : null;
+    if (input.deathDate !== undefined) {
+      const dParts = dateFieldsFromToken(input.deathDate);
+      data.deathDate = dParts.date;
+      data.deathPrecision = dParts.precision;
+      data.deathApprox = dParts.approx;
+    }
     if (input.deathPlace !== undefined)
       data.deathPlace = input.deathPlace?.trim() || null;
   }

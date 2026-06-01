@@ -15,6 +15,13 @@ enum Sex {
   UNKNOWN
 }
 
+// How precisely a date is known: full day, just the month, or only the year.
+enum DatePrecision {
+  DAY
+  MONTH
+  YEAR
+}
+
 // ----- NextAuth (Prisma adapter) -----
 model User {
   id            String    @id @default(cuid())
@@ -83,9 +90,13 @@ model Person {
   lastName    String?
   sex         Sex           @default(UNKNOWN)
   birthDate   DateTime?
+  birthPrecision DatePrecision @default(DAY)
+  birthApprox    Boolean       @default(false)
   birthPlace  String?
   deceased    Boolean       @default(false)
   deathDate   DateTime?
+  deathPrecision DatePrecision @default(DAY)
+  deathApprox    Boolean       @default(false)
   deathPlace  String?
   positionX   Float? // persisted canvas position (null -> auto-layout)
   positionY   Float?
@@ -111,13 +122,14 @@ model ParentChild {
 }
 
 model Partnership {
-  id         String @id @default(cuid())
+  id         String  @id @default(cuid())
   treeId     String
-  tree       Tree   @relation(fields: [treeId], references: [id], onDelete: Cascade)
+  tree       Tree    @relation(fields: [treeId], references: [id], onDelete: Cascade)
   partnerAId String
   partnerBId String
-  partnerA   Person @relation("partnerA", fields: [partnerAId], references: [id], onDelete: Cascade)
-  partnerB   Person @relation("partnerB", fields: [partnerBId], references: [id], onDelete: Cascade)
+  current    Boolean @default(true) // false for a former/ex partner
+  partnerA   Person  @relation("partnerA", fields: [partnerAId], references: [id], onDelete: Cascade)
+  partnerB   Person  @relation("partnerB", fields: [partnerBId], references: [id], onDelete: Cascade)
 
   @@unique([partnerAId, partnerBId])
   @@index([treeId])

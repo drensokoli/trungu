@@ -8,9 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleButton } from "./google-button";
+import { useT } from "@/lib/i18n";
 
 export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
   const router = useRouter();
+  const t = useT();
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -29,7 +31,7 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
       });
       const data = await res.json();
       if (!res.ok) {
-        setError(data.error ?? "Could not create account");
+        setError(data.error ?? t("auth.createFailed"));
         return;
       }
       const signin = await signIn("credentials", {
@@ -38,7 +40,7 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
         redirect: false,
       });
       if (signin?.error) {
-        setError("Account created — please log in");
+        setError(t("auth.createdLogIn"));
         router.push("/login");
         return;
       }
@@ -53,10 +55,10 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
     <div className="flex flex-col gap-5">
       {googleEnabled && (
         <>
-          <GoogleButton label="Sign up with Google" />
+          <GoogleButton label={t("auth.signupGoogle")} />
           <div className="flex items-center gap-3 text-xs text-muted">
             <span className="h-px flex-1 bg-border" />
-            or
+            {t("auth.or")}
             <span className="h-px flex-1 bg-border" />
           </div>
         </>
@@ -64,7 +66,7 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
 
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="name">Full name</Label>
+          <Label htmlFor="name">{t("auth.fullName")}</Label>
           <Input
             id="name"
             autoComplete="name"
@@ -74,7 +76,7 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="email">Email</Label>
+          <Label htmlFor="email">{t("auth.email")}</Label>
           <Input
             id="email"
             type="email"
@@ -85,7 +87,7 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="password">Password</Label>
+          <Label htmlFor="password">{t("auth.password")}</Label>
           <Input
             id="password"
             type="password"
@@ -95,18 +97,18 @@ export function SignupForm({ googleEnabled }: { googleEnabled: boolean }) {
             value={password}
             onChange={(e) => setPassword(e.target.value)}
           />
-          <p className="text-xs text-muted">At least 8 characters.</p>
+          <p className="text-xs text-muted">{t("auth.passwordHint")}</p>
         </div>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <Button type="submit" loading={loading} className="w-full">
-          Create account
+          {t("auth.signup.submit")}
         </Button>
       </form>
 
       <p className="text-center text-sm text-muted">
-        Already have an account?{" "}
+        {t("auth.haveAccount")}{" "}
         <Link href="/login" className="font-medium text-accent hover:underline">
-          Log in
+          {t("auth.toLogin")}
         </Link>
       </p>
     </div>

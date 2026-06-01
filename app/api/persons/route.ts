@@ -4,7 +4,7 @@ import { auth } from "@/lib/auth";
 import { addPersonSchema } from "@/lib/validations";
 import { personInputToData } from "@/lib/person-data";
 import { getTreeForUser } from "@/lib/tree-db";
-import { NODE_HEIGHT, NODE_WIDTH } from "@/lib/tree-layout";
+import { NODE_HEIGHT, NODE_WIDTH, SPOUSE_GAP } from "@/lib/tree-layout";
 
 export async function POST(req: Request) {
   const session = await auth();
@@ -26,7 +26,7 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
-  const { sourcePersonId, relation, person } = parsed.data;
+  const { sourcePersonId, relation, person, current } = parsed.data;
 
   const source = await prisma.person.findFirst({
     where: { id: sourcePersonId, tree: { ownerId: session.user.id } },
@@ -56,6 +56,7 @@ export async function POST(req: Request) {
     parent: { x: 0, y: -(NODE_HEIGHT + 110) },
     child: { x: 0, y: NODE_HEIGHT + 110 },
     sibling: { x: NODE_WIDTH + 60, y: 0 },
+    spouse: { x: NODE_WIDTH + SPOUSE_GAP, y: 0 },
   };
 
   await prisma.$transaction(async (tx) => {
@@ -85,6 +86,15 @@ export async function POST(req: Request) {
           },
         });
       }
+    } else if (relation === "spouse") {
+      await tx.partnership.create({
+        data: {
+          treeId,
+          partnerAId: source.id,
+          partnerBId: created.id,
+          current,
+        },
+      });
     } else if (relation === "child") {
       await tx.parentChild.create({
         data: { parentId: source.id, childId: created.id },

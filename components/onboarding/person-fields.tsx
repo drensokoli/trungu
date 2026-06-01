@@ -7,6 +7,8 @@ import { Switch } from "@/components/ui/switch";
 import { RadioGroup, RadioPill } from "@/components/ui/radio-group";
 import { DatePicker } from "@/components/ui/date-picker";
 import { PlaceAutocomplete } from "@/components/ui/place-autocomplete";
+import { useT } from "@/lib/i18n";
+import { capitalizeName } from "@/lib/utils";
 
 type Props = {
   /** Field name prefix, e.g. "self" or "mother". Empty for a flat single-person form. */
@@ -16,7 +18,21 @@ type Props = {
 
 export function PersonFields({ prefix, idPrefix }: Props) {
   const { register, control } = useFormContext();
+  const t = useT();
   const field = (name: string) => (prefix ? `${prefix}.${name}` : name);
+
+  // Auto-capitalize the first letter of each word as the user types a name.
+  const nameField = (name: string) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const reg = register(name as any);
+    return {
+      ...reg,
+      onChange: (e: React.ChangeEvent<HTMLInputElement>) => {
+        e.target.value = capitalizeName(e.target.value);
+        return reg.onChange(e);
+      },
+    };
+  };
 
   const deceased = useWatch({ control, name: field("deceased") }) as boolean;
 
@@ -24,27 +40,25 @@ export function PersonFields({ prefix, idPrefix }: Props) {
     <div className="flex flex-col gap-4">
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${idPrefix}-firstName`}>First name</Label>
+          <Label htmlFor={`${idPrefix}-firstName`}>{t("field.firstName")}</Label>
           <Input
             id={`${idPrefix}-firstName`}
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            {...register(field("firstName") as any)}
-            placeholder="First name"
+            {...nameField(field("firstName"))}
+            placeholder={t("field.firstName")}
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${idPrefix}-lastName`}>Last name</Label>
+          <Label htmlFor={`${idPrefix}-lastName`}>{t("field.lastName")}</Label>
           <Input
             id={`${idPrefix}-lastName`}
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            {...register(field("lastName") as any)}
-            placeholder="Last name"
+            {...nameField(field("lastName"))}
+            placeholder={t("field.lastName")}
           />
         </div>
       </div>
 
       <div className="flex flex-col gap-1.5">
-        <Label>Sex</Label>
+        <Label>{t("field.sex")}</Label>
         <Controller
           control={control}
           name={field("sex")}
@@ -54,9 +68,9 @@ export function PersonFields({ prefix, idPrefix }: Props) {
               value={f.value}
               onValueChange={f.onChange}
             >
-              <RadioPill value="MALE" label="Male" />
-              <RadioPill value="FEMALE" label="Female" />
-              <RadioPill value="UNKNOWN" label="Unknown" />
+              <RadioPill value="MALE" label={t("sex.MALE")} />
+              <RadioPill value="FEMALE" label={t("sex.FEMALE")} />
+              <RadioPill value="UNKNOWN" label={t("sex.UNKNOWN")} />
             </RadioGroup>
           )}
         />
@@ -64,7 +78,7 @@ export function PersonFields({ prefix, idPrefix }: Props) {
 
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${idPrefix}-birthDate`}>Date of birth</Label>
+          <Label htmlFor={`${idPrefix}-birthDate`}>{t("field.birthDate")}</Label>
           <Controller
             control={control}
             name={field("birthDate")}
@@ -78,7 +92,7 @@ export function PersonFields({ prefix, idPrefix }: Props) {
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor={`${idPrefix}-birthPlace`}>Place of birth</Label>
+          <Label htmlFor={`${idPrefix}-birthPlace`}>{t("field.birthPlace")}</Label>
           <Controller
             control={control}
             name={field("birthPlace")}
@@ -88,7 +102,7 @@ export function PersonFields({ prefix, idPrefix }: Props) {
                 value={f.value}
                 onChange={f.onChange}
                 onBlur={f.onBlur}
-                placeholder="Search a city or place"
+                placeholder={t("field.searchPlace")}
               />
             )}
           />
@@ -96,7 +110,7 @@ export function PersonFields({ prefix, idPrefix }: Props) {
       </div>
 
       <div className="flex items-center justify-between rounded-md border border-border bg-surface-2 px-3 py-2">
-        <Label htmlFor={`${idPrefix}-deceased`}>Deceased</Label>
+        <Label htmlFor={`${idPrefix}-deceased`}>{t("field.deceased")}</Label>
         <Controller
           control={control}
           name={field("deceased")}
@@ -113,7 +127,7 @@ export function PersonFields({ prefix, idPrefix }: Props) {
       {deceased && (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${idPrefix}-deathDate`}>Date of death</Label>
+            <Label htmlFor={`${idPrefix}-deathDate`}>{t("field.deathDate")}</Label>
             <Controller
               control={control}
               name={field("deathDate")}
@@ -127,7 +141,7 @@ export function PersonFields({ prefix, idPrefix }: Props) {
             />
           </div>
           <div className="flex flex-col gap-1.5">
-            <Label htmlFor={`${idPrefix}-deathPlace`}>Place of death</Label>
+            <Label htmlFor={`${idPrefix}-deathPlace`}>{t("field.deathPlace")}</Label>
             <Controller
               control={control}
               name={field("deathPlace")}
@@ -137,7 +151,7 @@ export function PersonFields({ prefix, idPrefix }: Props) {
                   value={f.value}
                   onChange={f.onChange}
                   onBlur={f.onBlur}
-                  placeholder="Search a city or place"
+                  placeholder={t("field.searchPlace")}
                 />
               )}
             />

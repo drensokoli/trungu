@@ -22,6 +22,6 @@ export type TreeDTO = {
   persons: PersonDTO[];
   /** parent -> child edges */
   parentChild: { parentId: string; childId: string }[];
-  /** partner pairs (undirected) */
-  partnerships: { partnerAId: string; partnerBId: string }[];
+  /** partner pairs (undirected); `current` is false for a former/ex partner */
+  partnerships: { partnerAId: string; partnerBId: string; current: boolean }[];
 };

@@ -1,5 +1,6 @@
 import type { Edge, Node } from "@xyflow/react";
 import type { PersonDTO, TreeDTO } from "@/lib/types";
+import { flexSortKey } from "@/lib/flex-date";
 
 export const NODE_WIDTH = 200;
 // Must match the person card's actual rendered height (see person-node.tsx) so
@@ -24,9 +25,10 @@ export type Orientation = "TB" | "LR";
 
 type Pos = { x: number; y: number };
 
-// React Flow places a bottom source handle's connection point a few units
-// below the (1px) junction node; subtract it so stems meet the spouse bar.
-const JUNCTION_HANDLE_OFFSET = 4;
+// Junction handles are pinned to the node's exact center (see junction-node.tsx),
+// so a junction's connection point coincides with its position — no handle-offset
+// compensation is needed and child stems meet the spouse bar exactly.
+const JUNCTION_HANDLE_OFFSET = 0;
 
 const unionKey = (ids: string[]) => [...ids].sort().join("+");
 const unionNodeId = (key: string) => `u:${key}`;
@@ -37,7 +39,7 @@ type Union = { key: string; parentIds: string[]; childIds: string[] };
 type LayoutInput = {
   persons: (Pick<PersonDTO, "id"> & { birthDate?: string | null })[];
   parentChild: { parentId: string; childId: string }[];
-  partnerships: { partnerAId: string; partnerBId: string }[];
+  partnerships: { partnerAId: string; partnerBId: string; current?: boolean }[];
 };
 
 /** A layout unit: a married/co-parenting pair (2 members) or a lone person (1). */
@@ -93,7 +95,12 @@ function computeCouples(tree: LayoutInput): {
   // Candidate pairs: explicit partnerships first (they win ties), then the
   // co-parent pairs implied by any union with exactly two parents.
   const pairs: [string, string][] = [];
-  for (const pr of tree.partnerships) {
+  // Current partners win the adjacency (`mate`) below, so a person sits next to
+  // their current spouse even if a former one was recorded first.
+  const orderedPartnerships = [...tree.partnerships].sort(
+    (a, b) => Number(b.current ?? true) - Number(a.current ?? true),
+  );
+  for (const pr of orderedPartnerships) {
     if (idSet.has(pr.partnerAId) && idSet.has(pr.partnerBId)) {
       pairs.push([pr.partnerAId, pr.partnerBId]);
     }
@@ -129,12 +136,18 @@ function computeCouples(tree: LayoutInput): {
   return { groups, groupOf };
 }
 
-/** Compare two ISO birth dates, oldest first; null/unknown sinks to the end. */
+/**
+ * Compare two flexible-date birth tokens, oldest first; null/unknown sinks to
+ * the end. Tokens compare lexically (a year-only "1990" precedes "1990-05"),
+ * which matches chronological order; the approximate "~" marker is stripped.
+ */
 function compareBirth(a: string | null, b: string | null): number {
-  if (a === b) return 0;
-  if (!a) return 1;
-  if (!b) return -1;
-  return a < b ? -1 : 1;
+  const ka = flexSortKey(a);
+  const kb = flexSortKey(b);
+  if (ka === kb) return 0;
+  if (!ka) return 1;
+  if (!kb) return -1;
+  return ka < kb ? -1 : 1;
 }
 
 // --- Genealogy layout constants -------------------------------------------
@@ -312,7 +325,20 @@ export function buildGenealogyLayout(
   // flanking outward, then center each member's parent-couple band over
   // [that member's flank + the member's card], recursing up. Disjoint bands +
   // outward flanks keep maternal/paternal branches from ever colliding.
-  const buildAround = (u: Couple, row: number, emitSelf: boolean): Block => {
+  //
+  // `reserveLeft/Right` say how far, on each side of this unit's cross center,
+  // the spine's own descendants (e.g. the focal's sibling comb) extend at the
+  // rows below. Flanks must clear that reserved interval — otherwise the
+  // members' siblings' children (the focal's cousins) land on top of the
+  // focal's own children-row. Without it, the two combs are packed
+  // independently and collide by a slot on each side.
+  const buildAround = (
+    u: Couple,
+    row: number,
+    emitSelf: boolean,
+    reserveLeft = 0,
+    reserveRight = 0,
+  ): Block => {
     visited.add(u.id);
     const order = orderedMembers(u);
     const nodes: BNode[] = [];
@@ -325,39 +351,54 @@ export function buildGenealogyLayout(
       }
 
       // Left member's siblings as descendant subtrees, packed just left of its
-      // card; the "group" is the flank plus the member card.
+      // card — but never closer in than the reserved central interval, so the
+      // flank's descendants clear the spine's children-row. The "group" is the
+      // flank plus the member card.
       const lf = siblingUnits(mL, u)
         .map((su) => descBlock(su, row))
         .filter((b): b is Block => b !== null);
+      const leftClear = Math.min(-d - crossCard / 2, -reserveLeft);
       let leftGroupLo = -d - crossCard / 2;
       const leftGroupHi = -d + crossCard / 2;
       if (lf.length > 0) {
         const { placed, hi } = packRow(lf);
-        const fshift = -d - crossCard / 2 - SIBLING_GAP - hi;
+        const fshift = leftClear - SIBLING_GAP - hi;
         for (const b of placed) nodes.push(...shift(b, fshift).nodes);
         leftGroupLo = Math.min(...placed.map((b) => extent(b)[0])) + fshift;
       }
 
-      // Right member's siblings, packed just right of its card.
+      // Right member's siblings, packed just right of its card (and clear of the
+      // reserved central interval).
       const rf = siblingUnits(mR, u)
         .map((su) => descBlock(su, row))
         .filter((b): b is Block => b !== null);
+      const rightClear = Math.max(d + crossCard / 2, reserveRight);
       const rightGroupLo = d - crossCard / 2;
       let rightGroupHi = d + crossCard / 2;
       if (rf.length > 0) {
         const { placed, lo } = packRow(rf);
-        const fshift = d + crossCard / 2 + SIBLING_GAP - lo;
+        const fshift = rightClear + SIBLING_GAP - lo;
         for (const b of placed) nodes.push(...shift(b, fshift).nodes);
         rightGroupHi = Math.max(...placed.map((b) => extent(b)[1])) + fshift;
       }
 
       // Each parent-couple band is centered over its child group; if the two
       // bands would collide (e.g. no flanks to separate them), push them apart
-      // symmetrically so the paternal/maternal columns stay disjoint.
+      // symmetrically so the paternal/maternal columns stay disjoint. Each
+      // member's group also covers its share of the reserved interval, so the
+      // grandparent band's own flanks clear this member's full footprint.
+      const lFootHalf = Math.max((leftGroupHi - leftGroupLo) / 2, reserveLeft);
+      const rFootHalf = Math.max((rightGroupHi - rightGroupLo) / 2, reserveRight);
       const PL = parentUnitOf(mL);
       const PR = parentUnitOf(mR);
-      const lband = PL && !visited.has(PL.id) ? buildAround(PL, row - 1, true) : null;
-      const rband = PR && !visited.has(PR.id) ? buildAround(PR, row - 1, true) : null;
+      const lband =
+        PL && !visited.has(PL.id)
+          ? buildAround(PL, row - 1, true, lFootHalf, lFootHalf)
+          : null;
+      const rband =
+        PR && !visited.has(PR.id)
+          ? buildAround(PR, row - 1, true, rFootHalf, rFootHalf)
+          : null;
       let lCenter = (leftGroupLo + leftGroupHi) / 2;
       let rCenter = (rightGroupLo + rightGroupHi) / 2;
       if (lband && rband) {
@@ -407,7 +448,6 @@ export function buildGenealogyLayout(
     for (const n of combNodes) nodes.push({ ...n, c: n.c - selfCenter });
     const band = parentUnitOf(m);
     if (band && !visited.has(band.id)) {
-      const bandBlock = buildAround(band, row - 1, true);
       // The comb spans every sibling plus the member's own slot (at cross 0).
       let lo = -crossCard / 2;
       let hi = crossCard / 2;
@@ -416,6 +456,10 @@ export function buildGenealogyLayout(
         hi = Math.max(hi, n.c + crossCard / 2);
       }
       const combCenter = (lo + hi) / 2;
+      // Reserve the comb's half-width on each side of its center so the parent
+      // band's flanks (this member's cousins) clear the comb's children-row.
+      const half = (hi - lo) / 2;
+      const bandBlock = buildAround(band, row - 1, true, half, half);
       nodes.push(...shift(bandBlock, combCenter - bandBlock.anchor).nodes);
     }
     return { nodes, anchor: 0 };
@@ -439,6 +483,27 @@ export function buildGenealogyLayout(
     const around = buildAround(focal, 0, false);
     const all = [...(descCentered?.nodes ?? []), ...around.nodes];
     for (const n of all) place(n.id, n.c, n.row);
+  }
+
+  // Seat additional / former spouses right beside their already-placed partner
+  // (a dashed bar will connect them) instead of leaving them to be parked far
+  // away. The tidy layout only pairs one spouse per person, so extras land here.
+  const extraSpouseStep = new Map<string, number>();
+  for (const pr of tree.partnerships) {
+    const aPlaced = positions.has(pr.partnerAId);
+    const bPlaced = positions.has(pr.partnerBId);
+    if (aPlaced === bPlaced) continue; // both already placed, or neither
+    const anchorId = aPlaced ? pr.partnerAId : pr.partnerBId;
+    const newId = aPlaced ? pr.partnerBId : pr.partnerAId;
+    const ap = positions.get(anchorId);
+    if (!ap) continue;
+    const k = (extraSpouseStep.get(anchorId) ?? 0) + 1;
+    extraSpouseStep.set(anchorId, k);
+    const step = (crossCard + SPOUSE_GAP) * k;
+    positions.set(
+      newId,
+      isTB ? { x: ap.x + step, y: ap.y } : { x: ap.x, y: ap.y + step },
+    );
   }
 
   // Park anyone the focal traversal never reached so they are never lost.
@@ -542,6 +607,34 @@ export function buildFlow(
       selectable: false,
     });
 
+    // For a couple, the spouse bar sits at the couple's main-axis CENTER while
+    // the child junction sits at its TRAILING edge (so the stem clears the
+    // sibling column). Bridge the two with a short straight connector so the
+    // parent relationship line and the parent-child stem form one continuous
+    // line with no gap. Single parents have no spouse bar, so they're skipped.
+    if (parents.length === 2) {
+      const mx = isTB ? jx : avg((c) => c.x);
+      const my = isTB ? avg((c) => c.y) : jy;
+      const mid = `m:${u.key}`;
+      junctionNodes.push({
+        id: mid,
+        type: "junction",
+        position: { x: mx, y: my },
+        data: {},
+        draggable: false,
+        selectable: false,
+      });
+      edges.push({
+        id: `mj:${u.key}`,
+        source: mid,
+        target: jid,
+        sourceHandle: isTB ? "out-bottom" : "out-right",
+        targetHandle: isTB ? "in-top" : "in-left",
+        type: "straight",
+        style: edgeStyle,
+      });
+    }
+
     for (const cid of children) {
       edges.push({
         id: `pc:${u.key}:${cid}`,
@@ -576,7 +669,8 @@ export function buildFlow(
       type: "smoothstep",
       data: { spouse: true },
       selectable: false,
-      style: edgeStyle,
+      // Former partners get a dashed bar to set them apart from current ones.
+      style: pair.current ? edgeStyle : { ...edgeStyle, strokeDasharray: "5 4" },
     });
   }
 

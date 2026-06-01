@@ -8,7 +8,7 @@ export default async function SignupPage() {
   if (session) redirect("/");
 
   return (
-    <AuthShell title="Create your account" subtitle="Start building your family tree">
+    <AuthShell titleKey="auth.signup.title" subtitleKey="auth.signup.subtitle">
       <SignupForm googleEnabled={googleEnabled} />
     </AuthShell>
   );

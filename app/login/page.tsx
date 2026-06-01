@@ -8,7 +8,7 @@ export default async function LoginPage() {
   if (session) redirect("/");
 
   return (
-    <AuthShell title="Welcome back" subtitle="Log in to your family tree">
+    <AuthShell titleKey="auth.login.title" subtitleKey="auth.login.subtitle">
       <LoginForm googleEnabled={googleEnabled} />
     </AuthShell>
   );

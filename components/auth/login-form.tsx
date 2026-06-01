@@ -8,9 +8,11 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { GoogleButton } from "./google-button";
+import { useT } from "@/lib/i18n";
 
 export function LoginForm({ googleEnabled }: { googleEnabled: boolean }) {
   const router = useRouter();
+  const t = useT();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
@@ -27,7 +29,7 @@ export function LoginForm({ googleEnabled }: { googleEnabled: boolean }) {
     });
     setLoading(false);
     if (res?.error) {
-      setError("Invalid email or password");
+      setError(t("auth.invalidCredentials"));
       return;
     }
     router.push("/");
@@ -38,10 +40,10 @@ export function LoginForm({ googleEnabled }: { googleEnabled: boolean }) {
     <div className="flex flex-col gap-5">
       {googleEnabled && (
         <>
-          <GoogleButton label="Continue with Google" />
+          <GoogleButton label={t("auth.continueGoogle")} />
           <div className="flex items-center gap-3 text-xs text-muted">
             <span className="h-px flex-1 bg-border" />
-            or
+            {t("auth.or")}
             <span className="h-px flex-1 bg-border" />
           </div>
         </>
@@ -49,7 +51,7 @@ export function LoginForm({ googleEnabled }: { googleEnabled: boolean }) {
 
       <form onSubmit={onSubmit} className="flex flex-col gap-4">
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="email">Email</Label>
+          <Label htmlFor="email">{t("auth.email")}</Label>
           <Input
             id="email"
             type="email"
@@ -60,7 +62,7 @@ export function LoginForm({ googleEnabled }: { googleEnabled: boolean }) {
           />
         </div>
         <div className="flex flex-col gap-1.5">
-          <Label htmlFor="password">Password</Label>
+          <Label htmlFor="password">{t("auth.password")}</Label>
           <Input
             id="password"
             type="password"
@@ -72,14 +74,14 @@ export function LoginForm({ googleEnabled }: { googleEnabled: boolean }) {
         </div>
         {error && <p className="text-sm text-red-600">{error}</p>}
         <Button type="submit" loading={loading} className="w-full">
-          Log in
+          {t("auth.login.submit")}
         </Button>
       </form>
 
       <p className="text-center text-sm text-muted">
-        Don&apos;t have an account?{" "}
+        {t("auth.noAccount")}{" "}
         <Link href="/signup" className="font-medium text-accent hover:underline">
-          Sign up
+          {t("auth.toSignup")}
         </Link>
       </p>
     </div>

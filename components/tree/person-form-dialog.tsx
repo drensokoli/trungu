@@ -11,7 +11,11 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { PersonFields } from "@/components/onboarding/person-fields";
+import { useT } from "@/lib/i18n";
+import type { DictKey } from "@/lib/dictionaries";
 import type { PersonDTO } from "@/lib/types";
 import type { PersonInput, Relation } from "@/lib/validations";
 
@@ -20,10 +24,11 @@ export type DialogState =
   | { mode: "edit"; person: PersonDTO }
   | null;
 
-const RELATION_LABEL: Record<Relation, string> = {
-  parent: "Add a parent",
-  sibling: "Add a sibling",
-  child: "Add a child",
+const RELATION_TITLE: Record<Relation, DictKey> = {
+  parent: "form.title.parent",
+  sibling: "form.title.sibling",
+  child: "form.title.child",
+  spouse: "form.title.spouse",
 };
 
 function emptyValues(): PersonInput {
@@ -44,10 +49,10 @@ function personToValues(p: PersonDTO): PersonInput {
     firstName: p.firstName,
     lastName: p.lastName ?? "",
     sex: p.sex,
-    birthDate: p.birthDate ? p.birthDate.slice(0, 10) : "",
+    birthDate: p.birthDate ?? "",
     birthPlace: p.birthPlace ?? "",
     deceased: p.deceased,
-    deathDate: p.deathDate ? p.deathDate.slice(0, 10) : "",
+    deathDate: p.deathDate ?? "",
     deathPlace: p.deathPlace ?? "",
   };
 }
@@ -61,16 +66,19 @@ export function PersonFormDialog({
   onClose: () => void;
   onSaved: () => void | Promise<void>;
 }) {
+  const t = useT();
   const methods = useForm<PersonInput>({ defaultValues: emptyValues() });
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [current, setCurrent] = useState(true);
 
   const open = state !== null;
 
   useEffect(() => {
     if (!state) return;
     setError(null);
+    setCurrent(true);
     methods.reset(
       state.mode === "edit" ? personToValues(state.person) : emptyValues(),
     );
@@ -79,12 +87,15 @@ export function PersonFormDialog({
 
   if (!state) return null;
 
+  const isSpouse = state.mode === "create" && state.relation === "spouse";
   const title =
-    state.mode === "create" ? RELATION_LABEL[state.relation] : "Edit person";
+    state.mode === "create"
+      ? t(RELATION_TITLE[state.relation])
+      : t("form.title.edit");
 
   async function onSubmit(values: PersonInput) {
     if (!values.firstName?.trim()) {
-      setError("First name is required.");
+      setError(t("form.firstNameRequired"));
       return;
     }
     setSaving(true);
@@ -99,6 +110,7 @@ export function PersonFormDialog({
             sourcePersonId: state!.sourcePersonId,
             relation: state!.relation,
             person: values,
+            current,
           }),
         });
       } else {
@@ -110,7 +122,7 @@ export function PersonFormDialog({
       }
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.error ?? "Could not save");
+        setError(data.error ?? t("form.saveFailed"));
         return;
       }
       await onSaved();
@@ -130,7 +142,7 @@ export function PersonFormDialog({
       });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
-        setError(data.error ?? "Could not delete");
+        setError(data.error ?? t("form.deleteFailed"));
         return;
       }
       await onSaved();
@@ -147,8 +159,8 @@ export function PersonFormDialog({
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>
             {state.mode === "create"
-              ? "Fill in what you know — you can edit it later."
-              : "Update this person's details."}
+              ? t("form.desc.create")
+              : t("form.desc.edit")}
           </DialogDescription>
         </DialogHeader>
 
@@ -158,6 +170,17 @@ export function PersonFormDialog({
             className="flex flex-col gap-4"
           >
             <PersonFields idPrefix="dlg" />
+
+            {isSpouse && (
+              <div className="flex items-center justify-between rounded-md border border-border bg-surface-2 px-3 py-2">
+                <Label htmlFor="dlg-current">{t("form.currentPartner")}</Label>
+                <Switch
+                  id="dlg-current"
+                  checked={current}
+                  onCheckedChange={setCurrent}
+                />
+              </div>
+            )}
 
             {error && <p className="text-sm text-red-600">{error}</p>}
 
@@ -170,17 +193,17 @@ export function PersonFormDialog({
                   onClick={onDelete}
                   loading={deleting}
                 >
-                  <Trash2 className="h-4 w-4" /> Delete
+                  <Trash2 className="h-4 w-4" /> {t("common.delete")}
                 </Button>
               ) : (
                 <span />
               )}
               <div className="flex gap-2">
                 <Button type="button" variant="ghost" onClick={onClose}>
-                  Cancel
+                  {t("common.cancel")}
                 </Button>
                 <Button type="submit" loading={saving}>
-                  Save
+                  {t("common.save")}
                 </Button>
               </div>
             </div>

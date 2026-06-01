@@ -9,13 +9,15 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Silhouette } from "./silhouette";
+import { useT } from "@/lib/i18n";
+import type { DictKey } from "@/lib/dictionaries";
 import type { PersonDTO } from "@/lib/types";
 import { formatDate, fullName } from "@/lib/utils";
 
-const SEX_LABEL: Record<PersonDTO["sex"], string> = {
-  MALE: "Male",
-  FEMALE: "Female",
-  UNKNOWN: "Unknown",
+const SEX_KEY: Record<PersonDTO["sex"], DictKey> = {
+  MALE: "sex.MALE",
+  FEMALE: "sex.FEMALE",
+  UNKNOWN: "sex.UNKNOWN",
 };
 
 function Row({ label, value }: { label: string; value: string }) {
@@ -40,6 +42,7 @@ export function PersonDetailsDialog({
   onClose: () => void;
   onEdit: (person: PersonDTO) => void;
 }) {
+  const t = useT();
   const open = person !== null;
 
   return (
@@ -53,30 +56,37 @@ export function PersonDetailsDialog({
                 <div className="min-w-0">
                   <DialogTitle className="flex items-center gap-2">
                     <span className="truncate">
-                      {fullName(person.firstName, person.lastName) || "Unnamed"}
+                      {fullName(person.firstName, person.lastName) ||
+                        t("person.unnamed")}
                     </span>
                     {isSelf && (
                       <span className="rounded bg-accent-soft px-1.5 py-0.5 text-[10px] font-medium text-accent">
-                        You
+                        {t("person.you")}
                       </span>
                     )}
                   </DialogTitle>
-                  <p className="text-sm text-muted">{SEX_LABEL[person.sex]}</p>
+                  <p className="text-sm text-muted">{t(SEX_KEY[person.sex])}</p>
                 </div>
               </div>
             </DialogHeader>
 
             <div className="flex flex-col">
-              <Row label="Date of birth" value={formatDate(person.birthDate)} />
-              <Row label="Place of birth" value={person.birthPlace ?? ""} />
+              <Row
+                label={t("field.birthDate")}
+                value={formatDate(person.birthDate)}
+              />
+              <Row
+                label={t("field.birthPlace")}
+                value={person.birthPlace ?? ""}
+              />
               {person.deceased && (
                 <>
                   <Row
-                    label="Date of death"
+                    label={t("field.deathDate")}
                     value={formatDate(person.deathDate)}
                   />
                   <Row
-                    label="Place of death"
+                    label={t("field.deathPlace")}
                     value={person.deathPlace ?? ""}
                   />
                 </>
@@ -85,10 +95,10 @@ export function PersonDetailsDialog({
 
             <div className="flex justify-end gap-2 pt-1">
               <Button variant="ghost" onClick={onClose}>
-                Close
+                {t("common.close")}
               </Button>
               <Button onClick={() => onEdit(person)}>
-                <Pencil className="h-4 w-4" /> Edit
+                <Pencil className="h-4 w-4" /> {t("common.edit")}
               </Button>
             </div>
           </>

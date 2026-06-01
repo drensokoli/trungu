@@ -1,23 +1,36 @@
+import { flexToParts } from "@/lib/flex-date";
 import type { PersonInput } from "@/lib/validations";
 
-/** Parse a "YYYY-MM-DD" string (or empty) into a UTC Date or null. */
+/** Parse a flexible date token (or empty) into a UTC Date or null. */
 export function parseDateString(value: string | undefined | null): Date | null {
-  if (!value) return null;
-  const d = new Date(`${value}T00:00:00.000Z`);
-  return Number.isNaN(d.getTime()) ? null : d;
+  return flexToParts(value).date;
+}
+
+/** Decompose a flexible date token into Prisma columns (date + precision + approx). */
+export function dateFieldsFromToken(token: string | undefined | null) {
+  const { date, precision, approx } = flexToParts(token);
+  return { date, precision, approx };
 }
 
 /** Normalize a PersonInput into Prisma-ready person fields. */
 export function personInputToData(input: PersonInput) {
   const deceased = Boolean(input.deceased);
+  const birth = flexToParts(input.birthDate);
+  const death = deceased
+    ? flexToParts(input.deathDate)
+    : { date: null, precision: "DAY" as const, approx: false };
   return {
     firstName: input.firstName.trim(),
     lastName: input.lastName?.trim() || null,
     sex: input.sex,
-    birthDate: parseDateString(input.birthDate),
+    birthDate: birth.date,
+    birthPrecision: birth.precision,
+    birthApprox: birth.approx,
     birthPlace: input.birthPlace?.trim() || null,
     deceased,
-    deathDate: deceased ? parseDateString(input.deathDate) : null,
+    deathDate: death.date,
+    deathPrecision: death.precision,
+    deathApprox: death.approx,
     deathPlace: deceased ? input.deathPlace?.trim() || null : null,
   };
 }

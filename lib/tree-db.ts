@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { partsToFlex, type DatePrecision } from "@/lib/flex-date";
 import type { PersonDTO, TreeDTO } from "@/lib/types";
 import type { Sex } from "@/lib/validations";
 
@@ -8,9 +9,13 @@ type PersonRow = {
   lastName: string | null;
   sex: string;
   birthDate: Date | null;
+  birthPrecision: string;
+  birthApprox: boolean;
   birthPlace: string | null;
   deceased: boolean;
   deathDate: Date | null;
+  deathPrecision: string;
+  deathApprox: boolean;
   deathPlace: string | null;
   positionX: number | null;
   positionY: number | null;
@@ -22,10 +27,15 @@ function toPersonDTO(p: PersonRow): PersonDTO {
     firstName: p.firstName,
     lastName: p.lastName,
     sex: p.sex as Sex,
-    birthDate: p.birthDate ? p.birthDate.toISOString() : null,
+    // Serialize the stored date + precision + approx flag back into one token.
+    birthDate:
+      partsToFlex(p.birthDate, p.birthPrecision as DatePrecision, p.birthApprox) ||
+      null,
     birthPlace: p.birthPlace,
     deceased: p.deceased,
-    deathDate: p.deathDate ? p.deathDate.toISOString() : null,
+    deathDate:
+      partsToFlex(p.deathDate, p.deathPrecision as DatePrecision, p.deathApprox) ||
+      null,
     deathPlace: p.deathPlace,
     positionX: p.positionX,
     positionY: p.positionY,
@@ -60,6 +70,7 @@ export async function getTreeForUser(userId: string): Promise<TreeDTO | null> {
     partnerships: tree.partnerships.map((p) => ({
       partnerAId: p.partnerAId,
       partnerBId: p.partnerBId,
+      current: p.current,
     })),
   };
 }

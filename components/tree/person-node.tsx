@@ -5,22 +5,25 @@ import { memo } from "react";
 import { Silhouette } from "./silhouette";
 import { AddPersonMenu } from "./add-person-menu";
 import { useTreeActions } from "./tree-context";
+import { useT } from "@/lib/i18n";
 import type { PersonNode as PersonNodeType } from "@/lib/tree-layout";
-import { fullName, yearOf } from "@/lib/utils";
+import { fullName } from "@/lib/utils";
+import { flexYearLabel } from "@/lib/flex-date";
 
 const handleClass = "!h-2 !w-2 !border-border !bg-surface";
-
-function lifespan(birth: string | null, deceased: boolean, death: string | null) {
-  const b = yearOf(birth);
-  const d = yearOf(death);
-  if (deceased) return `${b || "?"} – ${d || "?"}`;
-  return b ? `b. ${b}` : "";
-}
 
 function PersonNodeComponent({ data, selected }: NodeProps<PersonNodeType>) {
   const { person, isSelf, canAddParent } = data;
   const { onView } = useTreeActions();
-  const span = lifespan(person.birthDate, person.deceased, person.deathDate);
+  const t = useT();
+  // Year labels carry a "c." prefix when the date is approximate.
+  const b = flexYearLabel(person.birthDate);
+  const d = flexYearLabel(person.deathDate);
+  const span = person.deceased
+    ? `${b || "?"} – ${d || "?"}`
+    : b
+      ? t("person.bornYear", { year: b })
+      : "";
 
   return (
     <div className="group relative">
@@ -41,11 +44,12 @@ function PersonNodeComponent({ data, selected }: NodeProps<PersonNodeType>) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5">
             <p className="truncate text-sm font-semibold text-foreground">
-              {fullName(person.firstName, person.lastName) || "Unnamed"}
+              {fullName(person.firstName, person.lastName) ||
+                t("person.unnamed")}
             </p>
             {isSelf && (
               <span className="rounded bg-accent-soft px-1 py-0.5 text-[10px] font-medium text-accent">
-                You
+                {t("person.you")}
               </span>
             )}
           </div>
